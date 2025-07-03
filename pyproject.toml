@@ -1,0 +1,79 @@
+[project]
+name = "functionalnetworkssft"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Daniel Byrne",email = "realdanielbyrne@icloud.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Core ML frameworks with cross-platform support
+    "torch>=2.4.0,<2.8.0",  # PyTorch with MPS support for Apple Silicon
+    "torchvision>=0.19.0",  # Vision utilities
+    "torchaudio>=2.4.0",    # Audio utilities
+
+    # Hugging Face ecosystem
+    "transformers>=4.40.0,<5.0.0",  # Core transformers library
+    "datasets>=2.18.0",             # Dataset loading and processing
+    "tokenizers>=0.19.0",           # Fast tokenizers
+    "accelerate>=0.30.0",           # Training acceleration
+    "peft>=0.10.0",                 # Parameter-efficient fine-tuning (LoRA/QLoRA)
+
+    # Model hub and experiment tracking
+    "huggingface-hub>=0.22.0",      # Model hub integration
+    "wandb>=0.16.0",                # Experiment tracking
+
+    # Utilities
+    "tqdm>=4.65.0",                 # Progress bars
+    "pyyaml>=6.0",                  # YAML configuration files
+    "numpy>=1.24.0,<2.0.0",        # Numerical computing
+    "scipy>=1.10.0",                # Scientific computing
+
+    # Development and testing
+    "pytest>=7.0.0",               # Testing framework
+    "black>=23.0.0",               # Code formatting
+    "isort>=5.12.0",               # Import sorting
+    "mypy>=1.0.0",                 # Type checking
+]
+
+[project.optional-dependencies]
+# CUDA-specific dependencies (NVIDIA GPUs)
+cuda = [
+    "bitsandbytes>=0.43.0",         # Quantization library (CUDA only)
+    "flash-attn>=2.5.0",            # Flash attention (CUDA only)
+]
+
+# Apple Silicon optimizations
+apple-silicon = [
+    # Currently no Apple Silicon specific packages needed
+    # MPS support is built into PyTorch 2.4+
+]
+
+# Development dependencies
+dev = [
+    "jupyter>=1.0.0",              # Jupyter notebooks
+    "ipywidgets>=8.0.0",           # Jupyter widgets
+    "matplotlib>=3.7.0",          # Plotting
+    "seaborn>=0.12.0",             # Statistical plotting
+]
+
+# All optional dependencies (manually list to avoid circular dependency)
+all = [
+    # CUDA dependencies
+    "bitsandbytes>=0.43.0",
+    "flash-attn>=2.5.0",
+    # Dev dependencies
+    "jupyter>=1.0.0",
+    "ipywidgets>=8.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+]
+
+[tool.poetry]
+packages = [{include = "functionalnetworkssft", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

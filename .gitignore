@@ -1,0 +1,294 @@
+# =============================================================================
+# Python .gitignore for Poetry Project
+# =============================================================================
+
+# -------------------------
+# Python Bytecode & Cache
+# -------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# -------------------------
+# Distribution / Packaging
+# -------------------------
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# -------------------------
+# Poetry Specific
+# -------------------------
+# Keep poetry.lock in version control for reproducible builds
+# poetry.lock should NOT be ignored
+# Exclude Poetry virtual environment if created in project directory
+.venv/
+
+# -------------------------
+# Virtual Environments
+# -------------------------
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.env/
+.venv/
+
+# -------------------------
+# PyInstaller
+# -------------------------
+*.manifest
+*.spec
+
+# -------------------------
+# Unit Testing & Coverage
+# -------------------------
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# -------------------------
+# Jupyter Notebook
+# -------------------------
+.ipynb_checkpoints
+
+# -------------------------
+# IPython
+# -------------------------
+profile_default/
+ipython_config.py
+
+# -------------------------
+# Environment Variables
+# -------------------------
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.staging
+*.env
+
+# -------------------------
+# IDE & Editor Files
+# -------------------------
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# -------------------------
+# Operating System Files
+# -------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+
+# -------------------------
+# Documentation
+# -------------------------
+docs/_build/
+docs/build/
+site/
+
+# -------------------------
+# Machine Learning Specific
+# -------------------------
+# Model files (large binary files)
+*.bin
+*.safetensors
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.model
+
+# Datasets (usually too large for git)
+data/
+datasets/
+*.csv
+*.tsv
+*.json
+*.jsonl
+*.parquet
+
+# Training artifacts
+checkpoints/
+runs/
+logs/
+*.log
+wandb/
+mlruns/
+.tensorboard/
+
+# -------------------------
+# Temporary Files
+# -------------------------
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# -------------------------
+# Database Files
+# -------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# -------------------------
+# Secrets & Configuration
+# -------------------------
+secrets.yaml
+secrets.yml
+config.local.*
+*.secret
+*.key
+*.pem
+*.p12
+*.pfx
+
+# -------------------------
+# Build Tools
+# -------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# -------------------------
+# Celery
+# -------------------------
+celerybeat-schedule
+celerybeat.pid
+
+# -------------------------
+# SageMath
+# -------------------------
+*.sage.py
+
+# -------------------------
+# Spyder
+# -------------------------
+.spyderproject
+.spyproject
+
+# -------------------------
+# Rope
+# -------------------------
+.ropeproject
+
+# -------------------------
+# mkdocs
+# -------------------------
+/site
+
+# -------------------------
+# mypy
+# -------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# -------------------------
+# Pyre
+# -------------------------
+.pyre/
+
+# -------------------------
+# pytype
+# -------------------------
+.pytype/
+
+# -------------------------
+# Cython
+# -------------------------
+cython_debug/
+
+# -------------------------
+# Project Specific
+# -------------------------
+# Add any project-specific files or directories here
+# Example: custom config files, local scripts, etc.
+.venv/

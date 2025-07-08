@@ -156,6 +156,164 @@ from .utils.model_utils import (
     save_model_and_tokenizer,
 )
 
+# ===================== NEW: ICA helpers =====================
+from sklearn.decomposition import FastICA
+import numpy as np
+import json
+from collections import defaultdict
+import itertools
+
+
+def apply_ica_masks(
+    model: PreTrainedModel, mask_dict: dict[str, list[int]], mask_mode: str = "key"
+):
+    """
+    Inject forward pre-hooks that multiply the *input* of each MLP
+    down-projection by a binary mask.  Implementation follows the
+    reference design  [oai_citation:1‡ICA-Based Functional Network Masking for LLM Fine-Tuning.pdf](file-service://file-78U49V8bsfQqVCbLViHD19).
+    """
+    handles = []
+    hidden_size = (
+        getattr(model.config, "hidden_size", None)
+        or getattr(model.config, "n_embd", None)
+        or getattr(model.config, "d_model", None)
+        or model.get_input_embeddings().embedding_dim
+    )
+
+    # Locate decoder blocks (works for GPT-like and Llama-like layouts)
+    if hasattr(model, "transformer"):
+        blocks = getattr(model.transformer, "h", None) or getattr(
+            model.transformer, "blocks", None
+        )
+    elif hasattr(model, "model"):
+        blocks = getattr(model.model, "layers", None) or getattr(
+            model.model, "decoder", None
+        )
+    else:
+        blocks = None
+    if blocks is None:
+        logger.warning("Could not find transformer blocks – no masking applied.")
+        return handles
+
+    for layer_idx, block in enumerate(blocks):
+        for module in block.modules():
+            # pick the *second* Linear in the MLP (in_features > hidden_size)
+            if (
+                isinstance(module, nn.Linear)
+                or module.__class__.__name__ == "Linear8bitLt"
+            ):
+                if (
+                    module.out_features == hidden_size
+                    and module.in_features > hidden_size
+                ):
+                    neuron_ids = mask_dict.get(str(layer_idx), [])
+                    if mask_mode == "key":  # zero the key neurons
+                        mask = torch.ones(module.in_features)
+                        mask[neuron_ids] = 0.0
+                    else:  # zero everything *except* key neurons
+                        mask = torch.zeros(module.in_features)
+                        mask[neuron_ids] = 1.0
+                    mask = mask.float()
+
+                    def pre_hook(mod, inp, mask_tensor=mask):
+                        x = inp[0]
+                        return (x * mask_tensor.to(x.device, x.dtype),) + inp[1:]
+
+                    handles.append(module.register_forward_pre_hook(pre_hook))
+                    break  # stop after first matching linear in this block
+    return handles
+
+
+# ------------------------------------------------------------
+
+
+def compute_ica_masks_for_model(
+    model: PreTrainedModel,
+    dataset: Dataset,
+    tokenizer: PreTrainedTokenizerBase,
+    num_components: int = 20,
+    percentile: float = 98.0,
+    sample_batches: int = 100,
+):
+    """
+    Lightweight, on-the-fly ICA (FastICA) over MLP activations.
+    Adapted from the pseudocode in the paper  [oai_citation:2‡ICA-Based Functional Network Masking for LLM Fine-Tuning.pdf](file-service://file-78U49V8bsfQqVCbLViHD19).
+    Only a *sample* of the dataset is streamed to limit RAM/CPU use.
+    Returns a `mask_dict` ready for `apply_ica_masks`.
+    """
+    logger.info("Running ICA to discover functional networks – this can be slow…")
+    model.eval()
+    device = next(model.parameters()).device
+
+    # 1. collect activations
+    activations = defaultdict(list)
+    hooks = []
+
+    def capture(layer_idx):
+        def _hook(_, __, out):
+            # out: [B, T, d_int]  -> flatten B*T
+            activations[layer_idx].append(out.detach().cpu().float())
+
+        return _hook
+
+    # attach capture hooks on the MLP *intermediate* output
+    if hasattr(model, "transformer"):
+        blocks = getattr(model.transformer, "h", None) or getattr(
+            model.transformer, "blocks", None
+        )
+    else:
+        blocks = getattr(model.model, "layers", None)
+
+    for i, block in enumerate(blocks):
+        # first linear (up-proj) output lies right after activation
+        up_proj = next(
+            m
+            for n, m in block.named_modules()
+            if isinstance(m, nn.Linear) and m.out_features > m.in_features
+        )
+        hooks.append(up_proj.register_forward_hook(capture(i)))
+
+    # 2. feed a few mini-batches
+    dl = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
+    with torch.no_grad():
+        for idx, sample in enumerate(itertools.islice(dl, sample_batches)):
+            model(
+                input_ids=sample["input_ids"].to(device),
+                attention_mask=sample["attention_mask"].to(device),
+            )
+            if idx and idx % 10 == 0:
+                logger.info(f"  captured {idx}/{sample_batches} batches…")
+
+    for h in hooks:
+        h.remove()
+
+    # 3. concatenate and run ICA
+    layer_masks = {}
+    for layer_idx, acts in activations.items():
+        X = torch.cat(acts, dim=0).flatten(0, 1).numpy()  # [time, neurons]
+        ica = FastICA(n_components=num_components, random_state=0)
+        try:
+            A = ica.fit_transform(
+                X
+            ).T  # components × time  (we only need mixing matrix)
+            mixing = ica.mixing_  # [neurons, components]
+        except ValueError:
+            logger.warning(f"ICA failed on layer {layer_idx}, skipping.")
+            continue
+        # 4. pick top-|percentile| neurons across all components
+        thr = np.percentile(np.abs(mixing), percentile)
+        key_neurons = np.where(np.abs(mixing) >= thr)[0].tolist()
+        if key_neurons:
+            layer_masks[str(layer_idx)] = key_neurons
+
+    logger.info(
+        f"ICA complete – masking {sum(len(v) for v in layer_masks.values())} neurons."
+    )
+    return layer_masks
+
+
+# ============================================================
+
 
 class InstructionDataset(Dataset):
     """Enhanced dataset class for instruction-following data with automatic format detection."""
@@ -881,6 +1039,33 @@ def main():
         help="Only upload LoRA adapter files to Hub (not the full model)",
     )
 
+    # Masking and ICA arguments
+    parser.add_argument(
+        "--mask_mode",
+        type=str,
+        choices=["key", "complement"],
+        default=None,
+        help="When 'key' is selected, it should ablate (disable) the ICA-identified key neurons. When 'complement' is selected, it should keep only the key neurons active. When omitted, normal training should proceed without masking.",
+    )
+    parser.add_argument(
+        "--ica_mask_path",
+        type=str,
+        default=None,
+        help="A string argument defaulting to None that specifies the file path to a JSON file containing a dictionary mapping layer indices to lists of neuron indices (format: {layer-idx: [neuron-idx,…]}) as produced by an offline ICA analysis run.",
+    )
+    parser.add_argument(
+        "--ica_components",
+        type=int,
+        default=20,
+        help="An integer argument defaulting to 20 that specifies the number of independent components to extract when ICA needs to be performed on-the-fly during training.",
+    )
+    parser.add_argument(
+        "--ica_percentile",
+        type=float,
+        default=98.0,
+        help="A float argument defaulting to 98.0 that sets the percentile threshold (valid range 0-100) for selecting neurons within each component when ICA is executed on-the-fly.",
+    )
+
     args = parser.parse_args()
 
     # Load configuration from YAML if provided
@@ -1003,6 +1188,30 @@ def main():
             tokenizer=tokenizer,
             mlm=False,
         )
+
+        # ---------- NEW: functional-network masking ----------
+        mask_handles = []
+        if args.mask_mode is not None:
+            if args.ica_mask_path:
+                with open(args.ica_mask_path) as f:
+                    mask_dict = json.load(f)
+                logger.info(f"Loaded pre-computed ICA mask from {args.ica_mask_path}")
+            else:
+                # use *training* split to estimate ICA masks quickly
+                sample_for_ica = torch.utils.data.Subset(
+                    train_dataset, range(min(1024, len(train_dataset)))
+                )
+                mask_dict = compute_ica_masks_for_model(
+                    model,
+                    sample_for_ica,
+                    tokenizer,
+                    num_components=args.ica_components,
+                    percentile=args.ica_percentile,
+                    sample_batches=50,
+                )
+            mask_handles = apply_ica_masks(model, mask_dict, mask_mode=args.mask_mode)
+            logger.info(f"Applied functional-network masking: mode={args.mask_mode}")
+        # ------------------------------------------------------
 
         # Create trainer
         trainer = create_trainer(

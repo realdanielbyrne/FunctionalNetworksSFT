@@ -62,7 +62,7 @@ def test_cross_platform_utilities():
     logger.info("Testing cross-platform utilities...")
 
     try:
-        from utils.model_utils import (
+        from functionalnetworkssft.utils.model_utils import (
             get_optimal_device,
             get_recommended_dtype,
             is_quantization_supported,
@@ -89,7 +89,7 @@ def test_quantization_config():
     logger.info("Testing quantization configuration...")
 
     try:
-        from utils.model_utils import load_quantization_config
+        from functionalnetworkssft.utils.model_utils import load_quantization_config
 
         # Test with quantization enabled
         config = load_quantization_config(use_4bit=True)
@@ -115,7 +115,7 @@ def test_platform_detection():
     logger.info("Testing platform detection...")
 
     try:
-        from utils.platform_setup import (
+        from functionalnetworkssft.utils.platform_setup import (
             get_platform_info,
             check_cuda_availability,
             check_mps_availability,

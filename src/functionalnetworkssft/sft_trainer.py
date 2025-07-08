@@ -1233,6 +1233,10 @@ def main():
         logger.info("Starting training...")
         trainer.train(resume_from_checkpoint=checkpoint)
 
+        # Remove hooks to save an unmasked model
+        for h in mask_handles:
+            h.remove()
+
         # Save final model
         final_output_dir = os.path.join(args.output_dir, "final_model")
         save_model_and_tokenizer(model, tokenizer, final_output_dir)

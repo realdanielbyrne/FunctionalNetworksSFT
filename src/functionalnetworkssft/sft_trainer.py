@@ -579,47 +579,6 @@ def upload_to_hub(
     token: Optional[str] = None,
     push_adapter_only: bool = False,
 ) -> None:
-    """
-    Upload fine-tuned model to Hugging Face Hub.
-
-    This method handles uploading both the base model and LoRA adapters to the
-    Hugging Face Hub, with proper authentication and error handling.
-
-    Args:
-        model_path (str): Path to the saved model directory
-        tokenizer (AutoTokenizer): The tokenizer used with the model
-        repo_id (str): Repository name/ID on Hugging Face Hub (e.g., "username/model-name")
-        commit_message (Optional[str]): Commit message for the upload.
-            Defaults to "Upload fine-tuned model"
-        private (bool): Whether to create a private repository. Defaults to False
-        token (Optional[str]): Hugging Face authentication token. If None, will check
-            HF_TOKEN environment variable or prompt for login
-        push_adapter_only (bool): If True, only push LoRA adapter files.
-            Defaults to False (push full model)
-
-    Raises:
-        ValueError: If repo_id is invalid or model_path doesn't exist
-        HfHubHTTPError: If there are authentication or network issues
-        RepositoryNotFoundError: If the repository doesn't exist and can't be created
-
-    Examples:
-        # Upload full model to public repository
-        upload_to_hub(
-            model_path="./outputs/final_model",
-            tokenizer=tokenizer,
-            repo_id="myusername/my-fine-tuned-llama"
-        )
-
-        # Upload only LoRA adapters to private repository
-        upload_to_hub(
-            model_path="./outputs/final_model",
-            tokenizer=tokenizer,
-            repo_id="myusername/my-lora-adapters",
-            private=True,
-            push_adapter_only=True,
-            commit_message="Upload LoRA adapters for Llama-7B"
-        )
-    """
     try:
         logger.info(f"Starting upload to Hugging Face Hub: {repo_id}")
 

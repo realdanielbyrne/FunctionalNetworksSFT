@@ -203,17 +203,22 @@ def load_dataset_from_path(
     """Load dataset from local file or HuggingFace hub."""
     if os.path.isfile(dataset_name_or_path):
         logger.info(f"Loading dataset from local file: {dataset_name_or_path}")
-        # Load from local file
+        # Load from local file using HuggingFace datasets
         if dataset_name_or_path.endswith(".json"):
-            with open(dataset_name_or_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            dataset = load_dataset(
+                "json", data_files=dataset_name_or_path, split="train"
+            )
         elif dataset_name_or_path.endswith(".jsonl"):
-            data = []
-            with open(dataset_name_or_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    data.append(json.loads(line.strip()))
+            dataset = load_dataset(
+                "json", data_files=dataset_name_or_path, split="train"
+            )
+        elif dataset_name_or_path.endswith(".csv"):
+            dataset = load_dataset(
+                "csv", data_files=dataset_name_or_path, split="train"
+            )
         else:
             raise ValueError(f"Unsupported file format: {dataset_name_or_path}")
+        data = [item for item in dataset]
     else:
         logger.info(f"Loading dataset from HuggingFace hub: {dataset_name_or_path}")
         dataset = load_dataset(dataset_name_or_path, dataset_config_name, split="train")

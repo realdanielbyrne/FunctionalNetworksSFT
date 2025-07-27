@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 """
-Supervised Fine-Tuning (SFT) Script for Quantized Language Models
+Functional Network Supervised Fine-Tuning (SFT) Script for Language Models and Quantized Languager Models
 
-This script provides a complete solution for fine-tuning quantized language models
-using LoRA/QLoRA techniques with support for various model architectures and datasets.
+This script provides a complete solution for fine-tuning language models
+using LoRA/QLoRA techniques with support for various model architectures, datasets, and chat formats.
+
+Researchers have found that neurons in LLMs form functional networks analogous to functional brain
+networks. These are sets of neurons that consistently co-activate under certain conditions.
+Crucially, only a small fraction of neurons may constitute key networks essential for performance: masking
+these key networks (setting their outputs to zero) significantly degrades model performance, whereas
+retaining only these networks (masking all others) can still maintain much of the model’s functionality.
+Prior work even showed that manipulating important neurons’ outputs via amplification or masking can steer model behavior.
+
+Our goal is to leverage these insights by introducing binary neuron masks during fine-tuning. This mask
+will zero-out either a chosen functional network (to ablate it) or all but that network (to isolate it). The
+masking is applied in the forward pass to the outputs of specific neurons, thereby affecting which neurons
+contribute to model computations and which gradients are updated. This allows us to fine-tune the model
+with or without certain functional subnetworks, potentially leading to fine-tuned models where only key neuron weights
+are updated to accomodate new knowledge thus potentially mitigating the negative effects of full parameter fine tuning.
 
 Author: Daniel Byrne
 License: MIT
@@ -112,6 +126,10 @@ class DataArguments:
     auto_detect_format: bool = field(
         default=True,
         metadata={"help": "Automatically detect and convert dataset format"},
+    )
+    template_format: str = field(
+        default="auto",
+        metadata={"help": "Template format to use: auto, chat, alpaca, chatml, basic"},
     )
 
 
@@ -319,7 +337,7 @@ def compute_ica_masks_for_model(
 
 
 class InstructionDataset(Dataset):
-    """Enhanced dataset class for instruction-following data with automatic format detection."""
+    """Enhanced dataset class for instruction-following data with intelligent chat template handling."""
 
     def __init__(
         self,
@@ -328,18 +346,24 @@ class InstructionDataset(Dataset):
         max_length: int = 2048,
         instruction_template: str = "### Instruction:\n{instruction}\n\n### Response:\n{response}",
         auto_detect_format: bool = True,
+        template_format: str = "auto",
     ):
         self.data = data
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.instruction_template = instruction_template
         self.auto_detect_format = auto_detect_format
+        self.template_format = template_format
 
         # Set pad token if not exists
         if getattr(tokenizer, "pad_token", None) is None:
             eos_token = getattr(tokenizer, "eos_token", None)
             if eos_token is not None:
                 tokenizer.pad_token = eos_token
+
+        # Determine the actual template format to use
+        self.actual_template_format = self._determine_template_format()
+        logger.info(f"Using template format: {self.actual_template_format}")
 
         # Detect and log dataset format
         if self.auto_detect_format and data:
@@ -354,6 +378,41 @@ class InstructionDataset(Dataset):
                 logger.info(f"Sample conversion: {data[0]} -> {sample_converted}")
         else:
             self.detected_format = None
+
+    def _determine_template_format(self) -> str:
+        """Determine the actual template format to use based on the template_format setting."""
+        if self.template_format == "auto":
+            # Check if tokenizer has a chat template
+            if (
+                hasattr(self.tokenizer, "chat_template")
+                and self.tokenizer.chat_template is not None
+            ):
+                logger.info(
+                    "Auto-detected tokenizer chat template, using 'chat' format"
+                )
+                return "chat"
+            else:
+                logger.info(
+                    "No tokenizer chat template found, falling back to 'basic' format"
+                )
+                return "basic"
+        elif self.template_format == "chat":
+            # Force use of chat template
+            if (
+                not hasattr(self.tokenizer, "chat_template")
+                or self.tokenizer.chat_template is None
+            ):
+                raise ValueError(
+                    "Chat template format requested but tokenizer does not have a chat_template attribute"
+                )
+            return "chat"
+        elif self.template_format in ["alpaca", "chatml", "basic"]:
+            return self.template_format
+        else:
+            raise ValueError(
+                f"Invalid template_format: {self.template_format}. "
+                f"Must be one of: auto, chat, alpaca, chatml, basic"
+            )
 
     def __len__(self) -> int:
         return len(self.data)
@@ -375,20 +434,21 @@ class InstructionDataset(Dataset):
         else:
             converted_item = item
 
-        # Format the text
+        # Extract instruction and response
+        instruction = None
+        response = None
+
         if "instruction" in converted_item and "response" in converted_item:
-            text = self.instruction_template.format(
-                instruction=converted_item["instruction"],
-                response=converted_item["response"],
-            )
+            instruction = converted_item["instruction"]
+            response = converted_item["response"]
         elif "text" in converted_item:
+            # If we have pre-formatted text, use it directly
             text = converted_item["text"]
         else:
             # Fallback for legacy behavior
             if "instruction" in item and "response" in item:
-                text = self.instruction_template.format(
-                    instruction=item["instruction"], response=item["response"]
-                )
+                instruction = item["instruction"]
+                response = item["response"]
             elif "text" in item:
                 text = item["text"]
             else:
@@ -396,6 +456,11 @@ class InstructionDataset(Dataset):
                     f"Dataset item {idx} must contain either 'instruction'+'response' or 'text' fields. "
                     f"Available keys: {list(item.keys())}"
                 )
+
+        # Format the text based on the template format
+        if instruction is not None and response is not None:
+            text = self._format_text(instruction, response)
+        # If text is already set from above, use it as-is
 
         # Tokenize
         encoding = self.tokenizer.__call__(
@@ -412,6 +477,38 @@ class InstructionDataset(Dataset):
             "attention_mask": attention_mask,
             "labels": input_ids.clone(),
         }
+
+    def _format_text(self, instruction: str, response: str) -> str:
+        """Format instruction and response using the appropriate template."""
+        if self.actual_template_format == "chat":
+            # Use tokenizer's chat template
+            messages = [
+                {"role": "user", "content": instruction},
+                {"role": "assistant", "content": response},
+            ]
+            formatted = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False
+            )
+            # Ensure we return a string
+            if isinstance(formatted, str):
+                return formatted
+            else:
+                raise ValueError(
+                    f"Chat template returned non-string type: {type(formatted)}"
+                )
+        elif self.actual_template_format == "alpaca":
+            # Alpaca format
+            return f"### Instruction:\n{instruction}\n\n### Response:\n{response}"
+        elif self.actual_template_format == "chatml":
+            # ChatML format
+            return f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>"
+        elif self.actual_template_format == "basic":
+            # Use the provided instruction template
+            return self.instruction_template.format(
+                instruction=instruction, response=response
+            )
+        else:
+            raise ValueError(f"Unknown template format: {self.actual_template_format}")
 
 
 def load_quantization_config_from_args(
@@ -826,6 +923,15 @@ def main():
         action="store_false",
         help="Disable automatic dataset format detection",
     )
+    parser.add_argument(
+        "--template_format",
+        type=str,
+        default="auto",
+        choices=["auto", "chat", "alpaca", "chatml", "basic"],
+        help="Template format to use: auto (use tokenizer's chat template if available, otherwise basic), "
+        "chat (force tokenizer's chat template), alpaca (Alpaca format), "
+        "chatml (ChatML format), basic (use instruction_template)",
+    )
 
     # Quantization arguments
     parser.add_argument(
@@ -1053,6 +1159,7 @@ def main():
         instruction_template=args.instruction_template,
         validation_split=args.validation_split,
         auto_detect_format=args.auto_detect_format,
+        template_format=args.template_format,
     )
 
     quant_args = QuantizationArguments(
@@ -1133,6 +1240,7 @@ def main():
             data_args.max_seq_length,
             data_args.instruction_template,
             data_args.auto_detect_format,
+            data_args.template_format,
         )
 
         eval_dataset = None
@@ -1143,6 +1251,7 @@ def main():
                 data_args.max_seq_length,
                 data_args.instruction_template,
                 data_args.auto_detect_format,
+                data_args.template_format,
             )
 
         # Create data collator

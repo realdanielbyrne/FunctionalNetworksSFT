@@ -24,7 +24,7 @@ import numpy as np
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.functionalnetworkssft.sft_trainer import (
+from src.functionalnetworkssft.fnsft_trainer import (
     apply_ica_masks,
     compute_ica_masks_for_model,
 )
@@ -191,7 +191,7 @@ class TestICAMaskComputation(unittest.TestCase):
         self.dataset = MockDataset(size=20)
         self.tokenizer = Mock()
 
-    @patch("src.functionalnetworkssft.sft_trainer.FastICA")
+    @patch("src.functionalnetworkssft.fnsft_trainer.FastICA")
     @patch("torch.utils.data.DataLoader")
     def test_compute_ica_masks_for_model(self, mock_dataloader, mock_fastica):
         """Test computing ICA masks for model."""

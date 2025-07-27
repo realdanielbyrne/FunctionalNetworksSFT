@@ -209,8 +209,8 @@ class TestICATrainingIntegration(unittest.TestCase):
         use_precomputed = bool(args.ica_mask_path)
         self.assertFalse(use_precomputed)
 
-    @patch("src.functionalnetworkssft.sft_trainer.apply_ica_masks")
-    @patch("src.functionalnetworkssft.sft_trainer.compute_ica_masks_for_model")
+    @patch("src.functionalnetworkssft.fnsft_trainer.apply_ica_masks")
+    @patch("src.functionalnetworkssft.fnsft_trainer.compute_ica_masks_for_model")
     def test_ica_integration_workflow(self, mock_compute_ica, mock_apply_masks):
         """Test the complete ICA integration workflow."""
         # Mock return values

@@ -1,6 +1,6 @@
-# FunctionalNetworksSFT
+# Functional Networks SFT
 
-A cross-platform supervised fine-tuning (SFT) framework for language models with support for both CUDA and Apple Silicon acceleration.
+<Description>
 
 ## Features
 
@@ -36,7 +36,7 @@ A cross-platform supervised fine-tuning (SFT) framework for language models with
 ### Basic Usage
 
 ```bash
-poetry run python -m functionalnetworkssft.sft_trainer \
+poetry run python -m functionalnetworkssft.fnsft_trainer \
     --model_name_or_path microsoft/DialoGPT-medium \
     --dataset_name_or_path your_dataset.json \
     --output_dir ./output \

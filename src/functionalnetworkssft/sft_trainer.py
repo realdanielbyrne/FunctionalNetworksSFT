@@ -42,6 +42,14 @@ from huggingface_hub.errors import RepositoryNotFoundError, HfHubHTTPError
 import wandb
 from tqdm.auto import tqdm
 
+# ===================== ICA helpers =====================
+from sklearn.decomposition import FastICA
+import numpy as np
+import json
+from collections import defaultdict
+import itertools
+
+
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -156,13 +164,6 @@ from .utils.model_utils import (
     save_model_and_tokenizer,
 )
 
-# ===================== NEW: ICA helpers =====================
-from sklearn.decomposition import FastICA
-import numpy as np
-import json
-from collections import defaultdict
-import itertools
-
 
 def apply_ica_masks(
     model: PreTrainedModel, mask_dict: dict[str, list[int]], mask_mode: str = "key"
@@ -196,31 +197,33 @@ def apply_ica_masks(
         return handles
 
     for layer_idx, block in enumerate(blocks):
-        for module in block.modules():
+        for name, module in block.modules():
             # pick the *second* Linear in the MLP (in_features > hidden_size)
-            if (
-                isinstance(module, nn.Linear)
-                or module.__class__.__name__ == "Linear8bitLt"
-            ):
-                if (
-                    module.out_features == hidden_size
-                    and module.in_features > hidden_size
-                ):
-                    neuron_ids = mask_dict.get(str(layer_idx), [])
-                    if mask_mode == "key":  # zero the key neurons
-                        mask = torch.ones(module.in_features)
-                        mask[neuron_ids] = 0.0
-                    else:  # zero everything *except* key neurons
-                        mask = torch.zeros(module.in_features)
-                        mask[neuron_ids] = 1.0
-                    mask = mask.float()
+            # Identify linear or equivalent modules by type and shape
+            if isinstance(module, torch.nn.Linear):
+                in_features, out_features = module.in_features, module.out_features
+            elif (
+                module.__class__.__name__ == "Linear8bitLt"
+            ):  # bitsandbytes quantized linear
+                in_features, out_features = module.in_features, module.out_features
+            else:
+                continue
+            if out_features == hidden_size and in_features > out_features:
+                neuron_ids = mask_dict.get(str(layer_idx), [])
+                if mask_mode == "key":  # zero the key neurons
+                    mask = torch.ones(module.in_features)
+                    mask[neuron_ids] = 0.0
+                else:  # zero everything *except* key neurons
+                    mask = torch.zeros(module.in_features)
+                    mask[neuron_ids] = 1.0
+                mask = mask.float()
 
-                    def pre_hook(mod, inp, mask_tensor=mask):
-                        x = inp[0]
-                        return (x * mask_tensor.to(x.device, x.dtype),) + inp[1:]
+                def pre_hook(mod, inp, mask_tensor=mask):
+                    x = inp[0]
+                    return (x * mask_tensor.to(x.device, x.dtype),) + inp[1:]
 
-                    handles.append(module.register_forward_pre_hook(pre_hook))
-                    break  # stop after first matching linear in this block
+                handles.append(module.register_forward_pre_hook(pre_hook))
+                break  # stop after first matching linear in this block
     return handles
 
 

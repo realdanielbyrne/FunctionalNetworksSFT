@@ -1,6 +1,22 @@
 # Functional Networks SFT
 
-<Description>
+**FunctionalNetworksSFT** is a research-oriented framework for fine-tuning large language models using ICA-based functional network masking. This innovative approach leverages neuroscience insights about functional brain networks to selectively train or ablate specific neuron groups during supervised fine-tuning (SFT).
+
+## Core Innovation
+
+The framework implements **functional network masking** - a technique that applies binary masks to specific neurons during training based on Independent Component Analysis (ICA) of neuron activations. This allows researchers to:
+
+- **Ablate key networks**: Mask important functional networks to study their role in model performance
+- **Isolate networks**: Train only specific functional networks while masking all others
+- **Targeted fine-tuning**: Update weights only in functionally relevant neurons, potentially reducing negative effects of full parameter fine-tuning
+
+## Key Capabilities
+
+- **ICA-Based Network Discovery**: Automatically identifies functional networks using FastICA analysis of MLP activations
+- **Flexible Masking Modes**: Support for both ablation (`key`) and isolation (`complement`) masking strategies
+- **Pre-computed or On-the-fly ICA**: Use existing ICA masks from JSON files or compute them dynamically during training
+- **Hugging Face Integration**: Seamless compatibility with transformers, LoRA/QLoRA, and quantization techniques
+- **Cross-Platform Optimization**: Native support for CUDA, Apple Silicon (MPS), and CPU-only environments
 
 ## Features
 

@@ -185,7 +185,7 @@ site/
 # Datasets (usually too large for git)
 data/
 datasets/
-*.csv
+#*.csv
 *.tsv
 *.json
 *.jsonl

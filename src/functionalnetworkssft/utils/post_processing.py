@@ -1,5 +1,5 @@
 """
-Post-processing utilities for the pipeline system.
+Post-processing utilities for the functionalnetworkssft system.
 
 This module provides functionality for post-processing steps that run after
 pipeline execution, including Hugging Face Hub upload and GGUF conversion.

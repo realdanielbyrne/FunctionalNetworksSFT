@@ -1,3 +1,3 @@
 """
-Shared utilities for the FNSFT package.
+Shared utilities for the functionalnetworkssft package.
 """

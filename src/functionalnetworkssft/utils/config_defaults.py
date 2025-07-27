@@ -1,5 +1,5 @@
 """
-Configuration defaults utility for LMPipeline.
+Configuration defaults utility for functionalnetworkssft.
 
 This module provides intelligent default configuration values to improve user experience
 and reduce required configuration. It handles:

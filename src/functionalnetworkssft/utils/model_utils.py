@@ -146,8 +146,19 @@ def setup_lora(
     """Setup LoRA configuration for the model."""
     logger.info("Setting up LoRA configuration")
 
-    # Prepare model for k-bit training
-    model = prepare_model_for_kbit_training(model)
+    # Only prepare model for k-bit training if it's actually quantized
+    # Check if model has quantization config
+    is_quantized = (
+        hasattr(model, "config")
+        and hasattr(model.config, "quantization_config")
+        and model.config.quantization_config is not None
+    )
+
+    if is_quantized:
+        logger.info("Model is quantized, preparing for k-bit training")
+        model = prepare_model_for_kbit_training(model)
+    else:
+        logger.info("Model is not quantized, skipping k-bit training preparation")
 
     # Auto-detect target modules if not specified
     target_modules = lora_target_modules

@@ -125,7 +125,7 @@ poetry run fnsft \
     --logging_steps 40 \
     --save_steps 160 \
     --max_grad_norm 2 \
-    --use_auth_token  # Required for gated Llama models
+    --use_auth_token  # Required for gated models
 ```
 
 ### Authentication Examples

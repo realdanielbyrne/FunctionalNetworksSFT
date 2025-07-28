@@ -123,7 +123,7 @@ poetry run fnsft \
     --max_seq_length 128 \
     --eval_steps 40 \
     --logging_steps 40 \
-    --save_steps 150 \
+    --save_steps 160 \
     --max_grad_norm 2 \
     --use_auth_token  # Required for gated Llama models
 ```

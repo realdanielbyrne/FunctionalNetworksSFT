@@ -14,7 +14,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from transformers import AutoTokenizer
-from src.functionalnetworkssft.sft_trainer import InstructionDataset
+from src.functionalnetworkssft.fnsft_trainer import InstructionDataset
 
 
 def create_sample_data():

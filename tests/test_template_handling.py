@@ -17,6 +17,7 @@ class MockTokenizer:
         self.pad_token = None
         self.eos_token = "</s>"
         self.eos_token_id = 2
+        self.pad_token_id = None
         if has_chat_template:
             self.chat_template = (
                 chat_template
@@ -24,10 +25,25 @@ class MockTokenizer:
             )
 
     def __call__(self, text, **kwargs):
-        # Mock tokenization
-        tokens = text.split()[: kwargs.get("max_length", 10)]
-        input_ids = torch.tensor([list(range(len(tokens)))])
+        # Mock tokenization with padding simulation
+        max_length = kwargs.get("max_length", 10)
+        padding = kwargs.get("padding", False)
+
+        tokens = text.split()[:max_length]
+        token_ids = list(range(len(tokens)))
+
+        # Simulate padding if requested
+        if padding == "max_length" and len(token_ids) < max_length:
+            pad_id = self.pad_token_id if self.pad_token_id is not None else 0
+            token_ids.extend([pad_id] * (max_length - len(token_ids)))
+
+        input_ids = torch.tensor([token_ids])
         attention_mask = torch.ones_like(input_ids)
+
+        # Set attention mask to 0 for padding tokens
+        if padding == "max_length" and self.pad_token_id is not None:
+            attention_mask[input_ids == self.pad_token_id] = 0
+
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
     def apply_chat_template(
@@ -180,7 +196,59 @@ class TestInstructionDatasetTemplateHandling:
         assert "input_ids" in item
         assert "attention_mask" in item
         assert "labels" in item
+        # Labels should equal input_ids when no padding token is set
         assert torch.equal(item["input_ids"], item["labels"])
+
+    def test_padding_token_handling(self):
+        """Test that padding tokens are properly set to -100 in labels."""
+        tokenizer = MockTokenizer()
+        # Set up padding token
+        tokenizer.pad_token = "<pad>"
+        tokenizer.pad_token_id = 999
+
+        data = [{"instruction": "Hello", "response": "Hi!"}]
+
+        dataset = InstructionDataset(
+            data=data,
+            tokenizer=tokenizer,
+            template_format="alpaca",
+            auto_detect_format=False,
+            max_length=20,  # Force padding
+        )
+
+        item = dataset[0]
+
+        # Check that padding tokens in input_ids are set to -100 in labels
+        padding_positions = item["input_ids"] == tokenizer.pad_token_id
+        if padding_positions.any():
+            # Where input_ids has padding tokens, labels should have -100
+            assert torch.all(item["labels"][padding_positions] == -100)
+            # Where input_ids doesn't have padding tokens, labels should match input_ids
+            non_padding_positions = ~padding_positions
+            assert torch.all(
+                item["input_ids"][non_padding_positions]
+                == item["labels"][non_padding_positions]
+            )
+
+    def test_pad_token_setup_from_eos(self):
+        """Test that pad_token is set from eos_token when not available."""
+        tokenizer = MockTokenizer()
+        # Ensure no pad token initially
+        tokenizer.pad_token = None
+        tokenizer.pad_token_id = None
+
+        data = [{"instruction": "Hello", "response": "Hi!"}]
+
+        dataset = InstructionDataset(
+            data=data,
+            tokenizer=tokenizer,
+            template_format="alpaca",
+            auto_detect_format=False,
+        )
+
+        # Check that pad_token was set from eos_token
+        assert tokenizer.pad_token == tokenizer.eos_token
+        assert tokenizer.pad_token_id == tokenizer.eos_token_id
 
 
 if __name__ == "__main__":

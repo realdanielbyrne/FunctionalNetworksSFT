@@ -360,6 +360,12 @@ class InstructionDataset(Dataset):
             eos_token = getattr(tokenizer, "eos_token", None)
             if eos_token is not None:
                 tokenizer.pad_token = eos_token
+                # Also set pad_token_id to ensure consistency
+                if (
+                    not hasattr(tokenizer, "pad_token_id")
+                    or tokenizer.pad_token_id is None
+                ):
+                    tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
 
         # Determine the actual template format to use
         self.actual_template_format = self._determine_template_format()
@@ -472,10 +478,16 @@ class InstructionDataset(Dataset):
         )
         input_ids = encoding["input_ids"].squeeze()
         attention_mask = encoding["attention_mask"].squeeze()
+
+        # Create labels with padding tokens set to -100 to ignore them in loss calculation
+        labels = input_ids.clone()
+        if self.tokenizer.pad_token_id is not None:
+            labels[labels == self.tokenizer.pad_token_id] = -100
+
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": input_ids.clone(),
+            "labels": labels,
         }
 
     def _format_text(self, instruction: str, response: str) -> str:

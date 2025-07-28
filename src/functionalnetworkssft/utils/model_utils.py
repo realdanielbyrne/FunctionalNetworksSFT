@@ -137,6 +137,7 @@ def load_quantization_config(
 
 def setup_lora(
     model: Any,
+    use_peft: bool = True,
     lora_r: int = 16,
     lora_alpha: int = 32,
     lora_dropout: float = 0.1,
@@ -144,6 +145,39 @@ def setup_lora(
     lora_bias: str = "none",
 ) -> Any:
     """Setup LoRA configuration for the model."""
+    if not use_peft:
+        logger.info("PEFT disabled - using full parameter fine-tuning")
+        # For full fine-tuning, we still need to prepare quantized models if they are quantized
+        is_quantized = (
+            hasattr(model, "config")
+            and hasattr(model.config, "quantization_config")
+            and model.config.quantization_config is not None
+        )
+
+        if is_quantized:
+            logger.info(
+                "Model is quantized, preparing for k-bit training (full fine-tuning mode)"
+            )
+            model = prepare_model_for_kbit_training(model)
+        else:
+            logger.info("Model is not quantized, ready for full fine-tuning")
+
+        # Enable gradient computation for all parameters
+        for param in model.parameters():
+            param.requires_grad = True
+
+        # Log trainable parameters for full fine-tuning
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info(
+            f"Full fine-tuning mode: {trainable_params:,} trainable parameters out of {total_params:,} total parameters"
+        )
+        logger.info(
+            f"Trainable parameters: {100 * trainable_params / total_params:.2f}%"
+        )
+
+        return model
+
     logger.info("Setting up LoRA configuration")
 
     # Only prepare model for k-bit training if it's actually quantized
@@ -254,17 +288,56 @@ def split_dataset(
     return train_data, val_data
 
 
-def save_model_and_tokenizer(model: Any, tokenizer: Any, output_dir: str) -> None:
+def save_model_and_tokenizer(
+    model: Any, tokenizer: Any, output_dir: str, use_peft: Optional[bool] = None
+) -> None:
     """Save the fine-tuned model and tokenizer."""
     logger.info(f"Saving model to {output_dir}")
 
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
-    # Save model and tokenizer
-    if hasattr(model, "save_pretrained"):
-        model.save_pretrained(output_dir)
+    # Detect if this is a PEFT model if not explicitly specified
+    if use_peft is None:
+        use_peft = hasattr(model, "peft_config") and model.peft_config is not None
+
+    if use_peft:
+        logger.info("Saving PEFT model (adapters)")
+        # For PEFT models, save the adapters
+        if hasattr(model, "save_pretrained"):
+            model.save_pretrained(output_dir)
+        else:
+            logger.warning("Model does not have save_pretrained method")
+    else:
+        logger.info("Saving full fine-tuned model")
+        # For full fine-tuning, save the entire model
+        if hasattr(model, "save_pretrained"):
+            model.save_pretrained(output_dir)
+        else:
+            logger.warning("Model does not have save_pretrained method")
+
+    # Save tokenizer (same for both modes)
     if hasattr(tokenizer, "save_pretrained"):
         tokenizer.save_pretrained(output_dir)
+    else:
+        logger.warning("Tokenizer does not have save_pretrained method")
+
+    # Log what was saved
+    saved_files = os.listdir(output_dir)
+    logger.info(f"Saved files: {saved_files}")
+
+    if use_peft:
+        if "adapter_config.json" in saved_files:
+            logger.info("✓ PEFT adapter configuration saved")
+        if any(f.startswith("adapter_model") for f in saved_files):
+            logger.info("✓ PEFT adapter weights saved")
+    else:
+        if "config.json" in saved_files:
+            logger.info("✓ Model configuration saved")
+        if any(
+            f.startswith("pytorch_model") or f.endswith(".safetensors")
+            for f in saved_files
+        ):
+            logger.info("✓ Full model weights saved")
 
     logger.info("Model and tokenizer saved successfully")

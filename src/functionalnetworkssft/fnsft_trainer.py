@@ -178,6 +178,12 @@ class QuantizationArguments:
 class LoRAArguments:
     """Arguments for LoRA configuration."""
 
+    use_peft: bool = field(
+        default=True,
+        metadata={
+            "help": "Use Parameter-Efficient Fine-Tuning (LoRA/QLoRA). If False, performs full parameter fine-tuning."
+        },
+    )
     lora_r: int = field(default=16, metadata={"help": "LoRA rank"})
     lora_alpha: int = field(default=32, metadata={"help": "LoRA alpha parameter"})
     lora_dropout: float = field(default=0.1, metadata={"help": "LoRA dropout"})
@@ -641,6 +647,7 @@ def setup_lora_from_args(
     """Setup LoRA configuration from arguments."""
     return setup_lora(
         model=model,
+        use_peft=lora_args.use_peft,
         lora_r=lora_args.lora_r,
         lora_alpha=lora_args.lora_alpha,
         lora_dropout=lora_args.lora_dropout,
@@ -655,6 +662,92 @@ def load_dataset_from_args(data_args: DataArguments) -> List[Dict[str, Any]]:
         dataset_name_or_path=data_args.dataset_name_or_path,
         dataset_config_name=data_args.dataset_config_name,
     )
+
+
+def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
+    """Log detailed information about the training mode and its implications."""
+    logger.info("=" * 60)
+    logger.info("TRAINING MODE CONFIGURATION")
+    logger.info("=" * 60)
+
+    if use_peft:
+        logger.info("🔧 Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
+        logger.info("📊 Benefits:")
+        logger.info("   • Significantly reduced memory usage")
+        logger.info("   • Faster training and inference")
+        logger.info("   • Smaller model artifacts (adapters only)")
+        logger.info("   • Reduced risk of catastrophic forgetting")
+        logger.info("📋 Adapter Configuration:")
+        if hasattr(model, "peft_config") and model.peft_config:
+            logger.info(f"   • PEFT adapters configured and active")
+        else:
+            logger.info(f"   • No PEFT configuration detected")
+    else:
+        logger.info("🔧 Training Mode: Full Parameter Fine-Tuning")
+        logger.info("⚠️  Resource Requirements:")
+        logger.info("   • High memory usage (all parameters trainable)")
+        logger.info("   • Longer training time")
+        logger.info("   • Large model artifacts (full model)")
+        logger.info("   • Higher risk of catastrophic forgetting")
+        logger.info("💡 Recommendations:")
+        logger.info("   • Ensure sufficient GPU memory")
+        logger.info("   • Consider gradient checkpointing")
+        logger.info("   • Use lower learning rates")
+        logger.info("   • Monitor for overfitting")
+
+    # Log memory information if available
+    if torch.cuda.is_available():
+        try:
+            memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+            memory_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
+            logger.info(f"🖥️  GPU Memory Usage:")
+            logger.info(f"   • Allocated: {memory_allocated:.2f} GB")
+            logger.info(f"   • Reserved: {memory_reserved:.2f} GB")
+        except Exception as e:
+            logger.debug(f"Could not get GPU memory info: {e}")
+
+    logger.info("=" * 60)
+
+
+def adjust_training_args_for_mode(
+    training_args: TrainingArguments, use_peft: bool
+) -> TrainingArguments:
+    """Adjust training arguments based on whether PEFT or full fine-tuning is used."""
+    if not use_peft:
+        # For full fine-tuning, we might want to adjust some parameters
+        logger.info("Adjusting training arguments for full parameter fine-tuning")
+
+        # Full fine-tuning typically benefits from:
+        # - Lower learning rates to avoid catastrophic forgetting
+        # - More aggressive gradient checkpointing to save memory
+        # - Potentially different warmup strategies
+
+        # Adjust learning rate if it's the default PEFT learning rate
+        if training_args.learning_rate == 2e-4:  # Default PEFT learning rate
+            new_lr = 5e-5  # More conservative for full fine-tuning
+            logger.info(
+                f"Adjusting learning rate for full fine-tuning: {training_args.learning_rate} -> {new_lr}"
+            )
+            training_args.learning_rate = new_lr
+
+        # Ensure gradient checkpointing is enabled for memory efficiency
+        if not training_args.gradient_checkpointing:
+            logger.info(
+                "Enabling gradient checkpointing for full fine-tuning memory efficiency"
+            )
+            training_args.gradient_checkpointing = True
+
+        # Adjust warmup ratio for full fine-tuning
+        if training_args.warmup_ratio == 0.03:  # Default value
+            new_warmup = 0.1  # More warmup for full fine-tuning
+            logger.info(
+                f"Adjusting warmup ratio for full fine-tuning: {training_args.warmup_ratio} -> {new_warmup}"
+            )
+            training_args.warmup_ratio = new_warmup
+    else:
+        logger.info("Using training arguments optimized for PEFT")
+
+    return training_args
 
 
 def create_trainer(
@@ -736,6 +829,7 @@ def upload_to_hub(
     private: bool = False,
     token: Optional[str] = None,
     push_adapter_only: bool = False,
+    use_peft: Optional[bool] = None,
 ) -> None:
     try:
         logger.info(f"Starting upload to Hugging Face Hub: {repo_id}")
@@ -749,9 +843,19 @@ def upload_to_hub(
         if not os.path.exists(model_path):
             raise ValueError(f"Model path does not exist: {model_path}")
 
-        # Set default commit message
+        # Auto-detect training mode if not specified
+        if use_peft is None:
+            use_peft = os.path.exists(os.path.join(model_path, "adapter_config.json"))
+            logger.info(
+                f"Auto-detected training mode: {'PEFT' if use_peft else 'Full fine-tuning'}"
+            )
+
+        # Set default commit message based on training mode
         if commit_message is None:
-            commit_message = "Upload fine-tuned model with LoRA adapters"
+            if use_peft:
+                commit_message = "Upload fine-tuned model with LoRA adapters"
+            else:
+                commit_message = "Upload full fine-tuned model"
 
         # Handle authentication
         if token is None:
@@ -786,11 +890,11 @@ def upload_to_hub(
                 repo_id=repo_id, repo_type="model", private=private, exist_ok=True
             )
 
-        # Determine which files to upload
+        # Determine which files to upload based on training mode and push_adapter_only flag
         files_to_upload = []
 
-        if push_adapter_only:
-            # Only upload LoRA adapter files
+        if push_adapter_only or (use_peft and not push_adapter_only):
+            # Upload only LoRA adapter files (either explicitly requested or PEFT mode)
             adapter_files = [
                 "adapter_config.json",
                 "adapter_model.safetensors",
@@ -803,12 +907,25 @@ def upload_to_hub(
                     files_to_upload.append(file_name)
 
             if not files_to_upload:
-                raise ValueError(f"No LoRA adapter files found in {model_path}")
+                if use_peft:
+                    raise ValueError(
+                        f"No LoRA adapter files found in {model_path}. Model may not be a PEFT model."
+                    )
+                else:
+                    logger.warning(
+                        f"No LoRA adapter files found in {model_path}, falling back to full model upload"
+                    )
+                    push_adapter_only = False
 
-            logger.info(f"Uploading LoRA adapter files: {files_to_upload}")
-        else:
-            # Upload all model files
-            logger.info("Uploading full model (base model + adapters)")
+            if files_to_upload:
+                logger.info(f"Uploading LoRA adapter files: {files_to_upload}")
+
+        if not push_adapter_only:
+            # Upload all model files (full model or full model + adapters)
+            if use_peft:
+                logger.info("Uploading full PEFT model (base model + adapters)")
+            else:
+                logger.info("Uploading full fine-tuned model")
 
         # Upload tokenizer first
         logger.info("Uploading tokenizer...")
@@ -1021,7 +1138,13 @@ def main():
         help="Use double quantization for 4-bit",
     )
 
-    # LoRA arguments
+    # PEFT/LoRA arguments
+    parser.add_argument(
+        "--no_peft",
+        action="store_true",
+        default=False,
+        help="Disable PEFT and use full parameter fine-tuning instead. By default, PEFT (LoRA/QLoRA) is used.",
+    )
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
@@ -1240,6 +1363,7 @@ def main():
     )
 
     lora_args = LoRAArguments(
+        use_peft=not args.no_peft,  # Invert the no_peft flag
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
@@ -1290,6 +1414,19 @@ def main():
     logger.info(f"Dataset: {data_args.dataset_name_or_path}")
     logger.info(f"Output directory: {args.output_dir}")
 
+    # Log training mode
+    training_mode = (
+        "PEFT (LoRA/QLoRA)" if lora_args.use_peft else "Full Parameter Fine-Tuning"
+    )
+    logger.info(f"Training Mode: {training_mode}")
+    if not lora_args.use_peft:
+        logger.warning(
+            "Full parameter fine-tuning requires significantly more memory and compute resources!"
+        )
+        logger.warning(
+            "Consider using PEFT (--use_peft) for better resource efficiency."
+        )
+
     try:
         # Load quantization config
         quant_config = load_quantization_config_from_args(quant_args)
@@ -1297,8 +1434,14 @@ def main():
         # Load model and tokenizer
         model, tokenizer = load_model_and_tokenizer(model_args, quant_config)
 
-        # Setup LoRA
+        # Setup LoRA or prepare for full fine-tuning
         model = setup_lora_from_args(model, lora_args)
+
+        # Log detailed training mode information
+        log_training_mode_details(lora_args.use_peft, model)
+
+        # Adjust training arguments based on training mode
+        training_args = adjust_training_args_for_mode(training_args, lora_args.use_peft)
 
         # Load and prepare dataset
         data = load_dataset_from_args(data_args)
@@ -1381,7 +1524,7 @@ def main():
 
         # Save final model
         final_output_dir = os.path.join(args.output_dir, "final_model")
-        save_model_and_tokenizer(model, tokenizer, final_output_dir)
+        save_model_and_tokenizer(model, tokenizer, final_output_dir, lora_args.use_peft)
 
         # Convert to GGUF if requested
         if args.convert_to_gguf:
@@ -1403,6 +1546,7 @@ def main():
                     private=args.hub_private,
                     token=args.hub_token,
                     push_adapter_only=args.push_adapter_only,
+                    use_peft=lora_args.use_peft,
                 )
             except Exception as e:
                 logger.error(f"Failed to upload to Hub: {e}")

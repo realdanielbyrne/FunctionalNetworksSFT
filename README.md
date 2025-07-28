@@ -52,7 +52,7 @@ The framework implements **functional network masking** - a technique that appli
 ### Basic Usage
 
 ```bash
-poetry run python -m functionalnetworkssft.fnsft_trainer \
+poetry run fnsft \
     --model_name_or_path microsoft/DialoGPT-medium \
     --dataset_name_or_path your_dataset.json \
     --output_dir ./output \
@@ -60,6 +60,37 @@ poetry run python -m functionalnetworkssft.fnsft_trainer \
     --per_device_train_batch_size 4 \
     --torch_dtype auto
 ```
+
+### Example: Fine-tuning Llama-3.2-1B on Sarcasm Dataset
+
+This example demonstrates fine-tuning the Llama-3.2-1B model on a sarcasm detection dataset using intelligent chat template handling:
+
+```bash
+poetry run fnsft \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --dataset_name_or_path sarcasm.csv \
+    --output_dir ./fine-tuned-model \
+    --template_format auto \
+    --num_train_epochs 2 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --learning_rate 1e-5 \
+    --torch_dtype float32 \
+    --validation_split 0.05 \
+    --max_seq_length 128 \
+    --eval_steps 40 \
+    --logging_steps 40 \
+    --save_steps 150 \
+    --max_grad_norm 2
+```
+
+**Key features demonstrated:**
+
+- **Automatic Chat Template Detection**: `--template_format auto` automatically detects and uses Llama's chat template
+- **CSV Dataset Support**: Direct loading of CSV files with `question,answer` columns
+- **MacBook Compatibility**: `--torch_dtype float32` ensures compatibility with Apple Silicon
+- **Intelligent Data Splitting**: `--validation_split 0.05` automatically creates train/validation splits
+- **Optimized for Small Models**: Batch sizes and sequence length optimized for 1B parameter models
 
 ## Platform Support
 

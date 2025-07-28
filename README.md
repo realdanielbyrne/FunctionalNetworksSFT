@@ -49,6 +49,48 @@ The framework implements **functional network masking** - a technique that appli
 
    For detailed platform-specific installation instructions, see [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md).
 
+### Authentication Setup
+
+FunctionalNetworksSFT supports multiple methods for HuggingFace authentication, with automatic fallback handling:
+
+#### Method 1: Environment File (Recommended for Development)
+
+Create a `.env` file in your project root:
+
+```bash
+# .env file
+HF_TOKEN=hf_your_token_here
+```
+
+#### Method 2: Environment Variable
+
+```bash
+export HF_TOKEN=hf_your_token_here
+```
+
+#### Method 3: Interactive Login
+
+```bash
+huggingface-cli login
+```
+
+#### Token Precedence Order
+
+The framework uses the following precedence for authentication:
+
+**For Model Loading:**
+
+1. `HF_TOKEN` environment variable (including from `.env` file)
+2. Cached credentials from `huggingface-cli login`
+3. No authentication (may fail for gated models)
+
+**For Hub Uploads:**
+
+1. `--hub_token` CLI parameter (highest priority)
+2. `HF_TOKEN` environment variable (including from `.env` file)
+3. Cached credentials from `huggingface-cli login`
+4. Interactive login prompt
+
 ### Basic Usage
 
 ```bash
@@ -58,7 +100,8 @@ poetry run fnsft \
     --output_dir ./output \
     --num_train_epochs 3 \
     --per_device_train_batch_size 4 \
-    --torch_dtype auto
+    --torch_dtype auto \
+    --use_auth_token  # Enable authentication for gated models
 ```
 
 ### Example: Fine-tuning Llama-3.2-1B on Sarcasm Dataset
@@ -81,7 +124,52 @@ poetry run fnsft \
     --eval_steps 40 \
     --logging_steps 40 \
     --save_steps 150 \
-    --max_grad_norm 2
+    --max_grad_norm 2 \
+    --use_auth_token  # Required for gated Llama models
+```
+
+### Authentication Examples
+
+#### Example 1: Using .env File (Recommended)
+
+```bash
+# Create .env file with your token
+echo "HF_TOKEN=hf_your_token_here" > .env
+
+# Run training - token automatically loaded
+poetry run fnsft \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --dataset_name_or_path sarcasm.csv \
+    --output_dir ./fine-tuned-model \
+    --use_auth_token
+```
+
+#### Example 2: Hub Upload with Different Token
+
+```bash
+# Use one token for model loading, different token for upload
+poetry run fnsft \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --dataset_name_or_path sarcasm.csv \
+    --output_dir ./fine-tuned-model \
+    --use_auth_token \
+    --push_to_hub \
+    --hub_repo_id username/my-fine-tuned-model \
+    --hub_token hf_different_upload_token
+```
+
+#### Example 3: Using Cached Credentials
+
+```bash
+# Login once (credentials cached)
+huggingface-cli login
+
+# Run training without specifying tokens
+poetry run fnsft \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --dataset_name_or_path sarcasm.csv \
+    --output_dir ./fine-tuned-model \
+    --use_auth_token
 ```
 
 **Key features demonstrated:**
@@ -91,6 +179,75 @@ poetry run fnsft \
 - **MacBook Compatibility**: `--torch_dtype float32` ensures compatibility with Apple Silicon
 - **Intelligent Data Splitting**: `--validation_split 0.05` automatically creates train/validation splits
 - **Optimized for Small Models**: Batch sizes and sequence length optimized for 1B parameter models
+- **Seamless Authentication**: Automatic token loading from `.env` file or cached credentials
+
+### Troubleshooting Authentication
+
+#### Common Issues and Solutions
+
+**Issue: "401 Client Error: Unauthorized"**
+
+```bash
+# Solution 1: Check if token is loaded
+python -c "import os; print('HF_TOKEN found:', bool(os.getenv('HF_TOKEN')))"
+
+# Solution 2: Verify .env file format (no quotes, no export)
+cat .env  # Should show: HF_TOKEN=hf_your_token_here
+
+# Solution 3: Use interactive login as fallback
+huggingface-cli login
+```
+
+**Issue: "Access to model is restricted"**
+
+- Ensure you've requested access to the gated model at the HuggingFace model page
+- Wait for approval (can take time for popular models)
+- Verify your token has the correct permissions
+
+**Issue: Hub upload fails with different error**
+
+```bash
+# Use specific token for uploads
+fnsft --push_to_hub --hub_token hf_write_token ...
+```
+
+#### Token Security Best Practices
+
+- **Never commit `.env` files** to version control (already in `.gitignore`)
+- **Use read-only tokens** for model loading when possible
+- **Use write tokens** only for hub uploads with `--hub_token`
+- **Rotate tokens regularly** and update `.env` file accordingly
+
+### Token Verification Tool
+
+The framework includes a built-in tool to verify your HuggingFace token configuration:
+
+```bash
+# Check token configuration and access to gated models
+check-hf-token
+```
+
+This command will:
+
+- ✅ Load and verify your `.env` file
+- ✅ Test authentication with HuggingFace
+- ✅ Verify access to gated models (like Llama)
+- ✅ Provide troubleshooting guidance if issues are found
+
+**Example output:**
+
+```
+🔍 Checking HuggingFace token configuration...
+
+📁 Loading environment variables from .env
+✅ Loaded HF_TOKEN from .env file: hf_NcgaE...VkLpCBgB
+
+✅ HF_TOKEN found: hf_NcgaE...VkLpCBgB
+✅ Authentication successful for user: realdanielbyrne
+
+🔍 Testing access to meta-llama/Llama-3.2-1B-Instruct...
+✅ Successfully accessed the gated model!
+```
 
 ## Platform Support
 

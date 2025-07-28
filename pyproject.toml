@@ -42,6 +42,7 @@ dependencies = [
 
 [project.scripts]
 fnsft = "functionalnetworkssft.fnsft_trainer:main"
+check-hf-token = "functionalnetworkssft.check_hf_token:main"
 
 [project.optional-dependencies]
 # CUDA-specific dependencies (NVIDIA GPUs)

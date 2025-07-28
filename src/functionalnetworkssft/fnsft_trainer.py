@@ -79,6 +79,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def load_env_file():
+    """Load environment variables from .env file if it exists."""
+    env_file = Path(".env")
+    if env_file.exists():
+        logger.info(f"Loading environment variables from {env_file}")
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    # Remove quotes if present
+                    value = value.strip('"').strip("'")
+                    os.environ[key] = value
+                    if key == "HF_TOKEN":
+                        logger.info(
+                            f"Loaded HF_TOKEN from .env file: {value[:8]}...{value[-8:]}"
+                        )
+    else:
+        logger.debug("No .env file found")
+
+
 @dataclass
 class ModelArguments:
     """Arguments for model configuration."""
@@ -557,11 +578,36 @@ def load_model_and_tokenizer(
         elif model_args.torch_dtype == "float32":
             torch_dtype = torch.float32
 
+    # Get authentication token
+    auth_token = None
+    if model_args.use_auth_token:
+        # First try environment variable
+        auth_token = os.getenv("HF_TOKEN")
+        if auth_token:
+            logger.info("Using HF_TOKEN from environment")
+        else:
+            # Try to use cached credentials from huggingface-cli login
+            try:
+                from huggingface_hub import whoami
+
+                user_info = whoami()  # This will use cached token if available
+                logger.info(
+                    f"Using cached HuggingFace credentials for user: {user_info['name']}"
+                )
+                auth_token = (
+                    True  # Set to True to indicate we should use cached credentials
+                )
+            except Exception as e:
+                logger.warning(
+                    f"No HF_TOKEN environment variable and no cached credentials found: {e}"
+                )
+                auth_token = None
+
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
-        use_auth_token=model_args.use_auth_token,
+        token=auth_token,
     )
     # Set pad token if not exists
     if getattr(tokenizer, "pad_token", None) is None:
@@ -578,7 +624,7 @@ def load_model_and_tokenizer(
         quantization_config=quant_config,
         torch_dtype=torch_dtype,
         trust_remote_code=model_args.trust_remote_code,
-        use_auth_token=model_args.use_auth_token,
+        token=auth_token,
         device_map=device_map,
     )
 
@@ -862,6 +908,9 @@ def upload_to_hub(
 
 def main():
     """Main training function."""
+    # Load environment variables from .env file if it exists
+    load_env_file()
+
     # Parse arguments
     parser = argparse.ArgumentParser(
         description="Supervised Fine-Tuning for Language Models"
@@ -1119,6 +1168,7 @@ def main():
         default=None,
         help="Hugging Face authentication token (or set HF_TOKEN env var)",
     )
+
     parser.add_argument(
         "--push_adapter_only",
         action="store_true",
@@ -1153,6 +1203,7 @@ def main():
     )
 
     args = parser.parse_args()
+    print(args.hub_token)
 
     # Load configuration from YAML if provided
     if args.config:

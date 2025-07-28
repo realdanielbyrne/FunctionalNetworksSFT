@@ -38,6 +38,9 @@ dependencies = [
     "openai (>=1.97.1,<2.0.0)",
 ]
 
+[project.scripts]
+fnsft = "functionalnetworkssft.fnsft_trainer:main"
+
 [project.optional-dependencies]
 # CUDA-specific dependencies (NVIDIA GPUs)
 cuda = [

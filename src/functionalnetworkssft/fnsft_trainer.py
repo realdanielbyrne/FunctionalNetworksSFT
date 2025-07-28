@@ -1218,6 +1218,7 @@ def main():
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         eval_steps=args.eval_steps,
+        eval_strategy="steps",
         save_strategy="steps",
         save_total_limit=args.save_total_limit,
         load_best_model_at_end=args.load_best_model_at_end,

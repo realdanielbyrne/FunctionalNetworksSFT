@@ -1060,6 +1060,12 @@ def main():
         action="store_true",
         help="Whether higher metric is better",
     )
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=1.0,
+        help="Maximum gradient norm for gradient clipping",
+    )
 
     # Additional options
     parser.add_argument(
@@ -1224,6 +1230,7 @@ def main():
         gradient_checkpointing=True,
         fp16=args.torch_dtype == "float16",
         bf16=args.torch_dtype == "bfloat16",
+        max_grad_norm=args.max_grad_norm,
     )
 
     logger.info("Starting supervised fine-tuning...")

@@ -294,3 +294,21 @@ cython_debug/
 # Add any project-specific files or directories here
 # Example: custom config files, local scripts, etc.
 .venv/
+
+# -------------------------
+# ICA Comparison Experiment
+# -------------------------
+# Model directories and training artifacts
+experiments/ica_comparison/baseline_model/
+experiments/ica_comparison/experimental_model/
+experiments/ica_comparison/comparison_reports/
+experiments/ica_comparison/*.log
+experiments/ica_comparison/experiment_results.json
+
+# General experiment outputs
+experiments/*/models/
+experiments/*/checkpoints/
+experiments/*/outputs/
+experiments/*/results/
+experiments/*/*.log
+experiments/*/wandb/

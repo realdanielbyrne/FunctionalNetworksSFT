@@ -1,0 +1,80 @@
+# Baseline Training Configuration for ICA Comparison Experiment
+# Standard SFT without ICA masking
+
+# Model configuration
+model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
+torch_dtype: "auto"
+use_auth_token: true
+trust_remote_code: true
+
+# Dataset configuration
+dataset_name_or_path: "Josephgflowers/Finance-Instruct-500k"
+dataset_config_name: null
+max_seq_length: 2048
+validation_split: 0.1
+auto_detect_format: true
+template_format: "auto"
+
+# Training configuration
+output_dir: "./experiments/ica_comparison/baseline_model"
+num_train_epochs: 1
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 8
+gradient_accumulation_steps: 4
+learning_rate: 2e-4
+weight_decay: 0.01
+warmup_ratio: 0.03
+lr_scheduler_type: "cosine"
+max_grad_norm: 1.0
+
+# Evaluation configuration
+evaluation_strategy: "steps"
+eval_steps: 500
+save_strategy: "steps"
+save_steps: 500
+save_total_limit: 2
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+# Logging configuration
+logging_strategy: "steps"
+logging_steps: 50
+report_to: null  # Disable wandb for controlled comparison
+
+# PEFT configuration (enabled by default)
+use_peft: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.1
+lora_target_modules: null  # Auto-detect
+lora_bias: "none"
+
+# Memory optimization
+gradient_checkpointing: true
+use_4bit: true
+bnb_4bit_compute_dtype: "bfloat16"
+bnb_4bit_use_double_quant: true
+bnb_4bit_quant_type: "nf4"
+
+# ICA masking configuration (DISABLED for baseline)
+mask_mode: null  # No masking for baseline
+ica_mask_path: null
+ica_components: 20
+ica_percentile: 98.0
+
+# Reproducibility
+seed: 42
+data_seed: 42
+
+# Hub configuration (disabled for experiment)
+push_to_hub: false
+hub_repo_id: null
+hub_commit_message: "Baseline model for ICA comparison experiment"
+hub_private: false
+push_adapter_only: true
+
+# Additional options
+resume_from_checkpoint: null
+convert_to_gguf: false
+gguf_quantization: "q4_0"

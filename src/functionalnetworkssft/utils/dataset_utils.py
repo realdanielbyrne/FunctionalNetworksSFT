@@ -31,6 +31,13 @@ class DatasetFormatter:
             ),
             "response": item["output"],
         },
+        # System/User/Assistant format (3-column financial instruction format)
+        ("assistant", "system", "user"): lambda item: {
+            "instruction": DatasetFormatter._format_system_user_instruction(
+                item.get("system", ""), item["user"]
+            ),
+            "response": item["assistant"],
+        },
         # Prompt-completion formats
         ("prompt", "completion"): lambda item: {
             "instruction": item["prompt"],
@@ -53,6 +60,27 @@ class DatasetFormatter:
         # Text-only format (already formatted)
         ("text",): lambda item: {"text": item["text"]},
     }
+
+    @staticmethod
+    def _format_system_user_instruction(system: str, user: str) -> str:
+        """
+        Format system and user messages into a single instruction.
+
+        Args:
+            system: System prompt (can be empty)
+            user: User message
+
+        Returns:
+            Formatted instruction string
+        """
+        # Default system prompt for empty system fields
+        default_system = "You are a helpful assistant who thinks step by step when providing answers to user's questions."
+
+        # Use provided system prompt or default
+        system_prompt = system.strip() if system and system.strip() else default_system
+
+        # Format the instruction
+        return f"System: {system_prompt}\n\nUser: {user}"
 
     @staticmethod
     def detect_format(data: List[Dict[str, Any]]) -> tuple:
@@ -91,6 +119,7 @@ class DatasetFormatter:
 
         # Check for known formats in order of preference
         format_priority = [
+            ("assistant", "system", "user"),  # 3-column financial instruction format
             ("instruction", "input", "output"),
             ("instruction", "response"),
             ("instruction", "output"),

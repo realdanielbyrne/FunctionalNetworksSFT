@@ -111,7 +111,7 @@ This example demonstrates fine-tuning the Llama-3.2-1B model on a sarcasm detect
 ```bash
 poetry run fnsft \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --dataset_name_or_path sarcasm.csv \
+    --dataset_name_or_path examples/sarcasm.csv \
     --output_dir ./fine-tuned-model \
     --template_format auto \
     --num_train_epochs 2 \
@@ -139,7 +139,7 @@ echo "HF_TOKEN=hf_your_token_here" > .env
 # Run training - token automatically loaded
 poetry run fnsft \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --dataset_name_or_path sarcasm.csv \
+    --dataset_name_or_path examples/sarcasm.csv \
     --output_dir ./fine-tuned-model \
     --use_auth_token
 ```
@@ -150,7 +150,7 @@ poetry run fnsft \
 # Use one token for model loading, different token for upload
 poetry run fnsft \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --dataset_name_or_path sarcasm.csv \
+    --dataset_name_or_path examples/sarcasm.csv \
     --output_dir ./fine-tuned-model \
     --use_auth_token \
     --push_to_hub \
@@ -167,7 +167,7 @@ huggingface-cli login
 # Run training without specifying tokens
 poetry run fnsft \
     --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
-    --dataset_name_or_path sarcasm.csv \
+    --dataset_name_or_path examples/sarcasm.csv \
     --output_dir ./fine-tuned-model \
     --use_auth_token
 ```
@@ -180,6 +180,29 @@ poetry run fnsft \
 - **Intelligent Data Splitting**: `--validation_split 0.05` automatically creates train/validation splits
 - **Optimized for Small Models**: Batch sizes and sequence length optimized for 1B parameter models
 - **Seamless Authentication**: Automatic token loading from `.env` file or cached credentials
+
+### Comprehensive Example Script
+
+For a complete demonstration including both PEFT and full fine-tuning modes, see the dedicated example script:
+
+```bash
+# Run comprehensive demonstration with both training modes
+python examples/llama_sarcasm_example.py
+
+# Run only PEFT training (memory efficient)
+python examples/llama_sarcasm_example.py --mode peft
+
+# Run only full fine-tuning (higher performance)
+python examples/llama_sarcasm_example.py --mode full
+```
+
+This script demonstrates:
+
+- **Both training modes**: PEFT (LoRA) and full parameter fine-tuning
+- **Non-quantized model**: Full precision Llama-3.2-1B-Instruct
+- **Real dataset**: 200 sarcasm question-answer pairs from `examples/sarcasm.csv`
+- **Memory optimization**: Proper configuration for different GPU memory requirements
+- **Performance comparison**: Side-by-side comparison of training approaches
 
 ### Troubleshooting Authentication
 

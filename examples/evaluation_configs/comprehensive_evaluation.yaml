@@ -1,0 +1,187 @@
+# Comprehensive Evaluation Configuration
+# This configuration runs a full evaluation suite including all major benchmarks
+
+# Model configuration
+model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"  # Replace with your model
+tokenizer_name_or_path: null  # Use same as model if null
+use_auth_token: true
+trust_remote_code: true
+torch_dtype: "auto"
+device_map: "auto"
+
+# Output configuration
+output_dir: "./evaluation_results"
+run_name: "comprehensive_evaluation"
+
+# Performance settings
+batch_size: 8
+max_length: 2048
+num_workers: 4
+
+# Statistical settings
+confidence_level: 0.95
+bootstrap_samples: 1000
+
+# Reporting settings
+generate_report: true
+include_visualizations: true
+save_predictions: false
+
+# Comparison settings
+baseline_results: null
+compare_with_published: true
+
+# Safety and efficiency
+enable_safety_checks: true
+enable_efficiency_metrics: true
+
+# Logging
+log_level: "INFO"
+use_wandb: false
+wandb_project: "llm-evaluation"
+
+# Benchmarks configuration
+benchmarks:
+  # Language Understanding Metrics
+  - name: "language_understanding"
+    enabled: true
+    max_samples: 500
+    batch_size: 8
+    metrics:
+      - name: "perplexity"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+      - name: "bleu"
+        enabled: true
+        parameters:
+          max_order: 4
+          smooth: false
+        weight: 1.0
+      - name: "rouge"
+        enabled: true
+        parameters:
+          rouge_types: ["rouge1", "rouge2", "rougeL"]
+          use_stemmer: true
+        weight: 1.0
+      - name: "bertscore"
+        enabled: true
+        parameters:
+          model_type: "microsoft/deberta-xlarge-mnli"
+          verbose: false
+        weight: 1.0
+
+  # MMLU - Massive Multitask Language Understanding
+  - name: "mmlu"
+    enabled: true
+    dataset_name: "cais/mmlu"
+    dataset_config: null
+    subset: null
+    max_samples: 1000
+    batch_size: 4
+    metrics:
+      - name: "mmlu_accuracy"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+    parameters:
+      subjects: ["all"]  # Can specify specific subjects
+
+  # HellaSwag - Commonsense Reasoning
+  - name: "hellaswag"
+    enabled: true
+    dataset_name: "Rowan/hellaswag"
+    max_samples: 1000
+    batch_size: 4
+    metrics:
+      - name: "hellaswag_accuracy"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+
+  # ARC - AI2 Reasoning Challenge
+  - name: "arc"
+    enabled: true
+    dataset_name: "ai2_arc"
+    dataset_config: "ARC-Challenge"
+    max_samples: 500
+    batch_size: 4
+    metrics:
+      - name: "arc_accuracy"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+
+  # GSM8K - Mathematical Reasoning
+  - name: "gsm8k"
+    enabled: true
+    dataset_name: "gsm8k"
+    dataset_config: "main"
+    max_samples: 500
+    batch_size: 2
+    metrics:
+      - name: "gsm8k_accuracy"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+
+  # HumanEval - Code Generation (if applicable)
+  - name: "humaneval"
+    enabled: false  # Disabled by default as it requires code execution
+    dataset_name: "openai_humaneval"
+    max_samples: 100
+    batch_size: 1
+    metrics:
+      - name: "humaneval_pass_at_k"
+        enabled: true
+        parameters:
+          k: 1
+        weight: 1.0
+
+  # Performance and Efficiency Metrics
+  - name: "performance"
+    enabled: true
+    max_samples: 50
+    batch_size: 4
+    metrics:
+      - name: "inference_speed"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+      - name: "memory_usage"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+      - name: "model_size"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+      - name: "flops"
+        enabled: true
+        parameters: {}
+        weight: 1.0
+    parameters:
+      max_length: 512
+      max_new_tokens: 50
+
+  # Safety and Bias Evaluation
+  - name: "safety"
+    enabled: true
+    max_samples: 100
+    batch_size: 4
+    metrics:
+      - name: "toxicity"
+        enabled: true
+        parameters:
+          threshold: 0.5
+        weight: 1.0
+      - name: "bias"
+        enabled: true
+        parameters:
+          bias_categories: ["gender", "race", "religion"]
+        weight: 1.0
+      - name: "harmful_content"
+        enabled: true
+        parameters:
+          harm_categories: ["violence", "self_harm", "illegal_activities", "misinformation"]
+        weight: 1.0

@@ -1403,7 +1403,7 @@ def main():
         run_name=f"sft-{Path(args.model_name_or_path).name}",
         remove_unused_columns=False,
         dataloader_pin_memory=False,
-        gradient_checkpointing=True,
+        gradient_checkpointing=not lora_args.use_peft,  # Disable for PEFT to avoid gradient issues
         fp16=args.torch_dtype == "float16",
         bf16=args.torch_dtype == "bfloat16",
         max_grad_norm=args.max_grad_norm,
@@ -1497,6 +1497,10 @@ def main():
             mask_handles = apply_ica_masks(model, mask_dict, mask_mode=args.mask_mode)
             logger.info(f"Applied functional-network masking: mode={args.mask_mode}")
         # ------------------------------------------------------
+
+        # Ensure model is in training mode
+        model.train()
+        logger.info("Model set to training mode")
 
         # Create trainer
         trainer = create_trainer(

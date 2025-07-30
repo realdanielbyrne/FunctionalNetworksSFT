@@ -1,0 +1,65 @@
+# Quick Evaluation Configuration
+# This configuration runs a fast evaluation with essential metrics only
+
+# Model configuration
+model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"  # Replace with your model
+use_auth_token: true
+trust_remote_code: true
+torch_dtype: "auto"
+
+# Output configuration
+output_dir: "./evaluation_results/quick"
+run_name: "quick_evaluation"
+
+# Performance settings (optimized for speed)
+batch_size: 16
+max_length: 512
+num_workers: 4
+
+# Reporting settings
+generate_report: true
+include_visualizations: false
+save_predictions: false
+
+# Logging
+log_level: "INFO"
+use_wandb: false
+
+# Benchmarks configuration (limited for speed)
+benchmarks:
+  # Basic Language Understanding
+  - name: "language_understanding"
+    enabled: true
+    max_samples: 100  # Reduced for speed
+    batch_size: 16
+    metrics:
+      - name: "perplexity"
+        enabled: true
+      - name: "bleu"
+        enabled: true
+
+  # MMLU (subset)
+  - name: "mmlu"
+    enabled: true
+    dataset_name: "cais/mmlu"
+    max_samples: 200  # Reduced for speed
+    batch_size: 8
+    metrics:
+      - name: "mmlu_accuracy"
+        enabled: true
+
+  # Performance metrics
+  - name: "performance"
+    enabled: true
+    max_samples: 20  # Very limited for speed
+    batch_size: 8
+    metrics:
+      - name: "inference_speed"
+        enabled: true
+      - name: "memory_usage"
+        enabled: true
+      - name: "model_size"
+        enabled: true
+    parameters:
+      max_length: 256
+      max_new_tokens: 25

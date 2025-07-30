@@ -193,6 +193,8 @@ datasets/
 
 # Training artifacts
 checkpoints/
+fine-tuned-models/
+checkpoints_*/
 runs/
 logs/
 *.log

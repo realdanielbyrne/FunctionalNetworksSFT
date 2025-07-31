@@ -29,11 +29,13 @@ from functionalnetworkssft.fnsft_trainer import main as fnsft_main
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler('experiments/experiment_b_peft_ica/output/experiment_b.log'),
-        logging.StreamHandler()
-    ]
+        logging.FileHandler(
+            "experiments/experiment_b_peft_ica/output/experiment_b.log"
+        ),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -53,45 +55,41 @@ def run_experiment_b():
     logger.info("ICA Components: 20")
     logger.info("ICA Percentile: 98.0")
     logger.info("=" * 80)
-    
+
     # Set up the configuration file path
     config_path = "experiments/experiment_b_peft_ica/config/experiment_b_config.yaml"
-    
+
     # Verify configuration file exists
     if not os.path.exists(config_path):
         logger.error(f"Configuration file not found: {config_path}")
         return False
-    
+
     # Verify dataset exists
     dataset_path = "datasets/sarcasm.csv"
     if not os.path.exists(dataset_path):
         logger.error(f"Dataset file not found: {dataset_path}")
         return False
-    
+
     # Create output directory if it doesn't exist
     output_dir = "experiments/experiment_b_peft_ica/output"
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Simulate command line arguments for the fnsft_trainer
     original_argv = sys.argv.copy()
     try:
-        sys.argv = [
-            "fnsft_trainer.py",
-            "--config",
-            config_path
-        ]
-        
+        sys.argv = ["fnsft_trainer.py", "--config", config_path]
+
         logger.info(f"Starting training with config: {config_path}")
         logger.info("This may take several minutes...")
         logger.info("Note: ICA computation will add extra time at the beginning")
-        
+
         # Run the training
         fnsft_main()
-        
+
         logger.info("Experiment B completed successfully!")
         logger.info(f"Results saved to: {output_dir}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Experiment B failed with error: {str(e)}")
         return False
@@ -105,7 +103,12 @@ if __name__ == "__main__":
     if success:
         print("\n✅ Experiment B completed successfully!")
         print("📁 Check experiments/experiment_b_peft_ica/output/ for results")
+        print("\n💡 To run evaluation comparing both models, use:")
+        print("   python experiments/peft_vs_peft-ica/evaluate_models.py")
+        print("   (Note: Both experiments A and B must be completed first)")
     else:
         print("\n❌ Experiment B failed!")
-        print("📋 Check experiments/experiment_b_peft_ica/output/experiment_b.log for details")
+        print(
+            "📋 Check experiments/experiment_b_peft_ica/output/experiment_b.log for details"
+        )
         sys.exit(1)

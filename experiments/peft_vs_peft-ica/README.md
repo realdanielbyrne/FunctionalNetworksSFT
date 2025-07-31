@@ -1,4 +1,4 @@
-# Fine-Tuning Experiments: PEFT vs PEFT+ICA
+# PEFT vs PEFT+ICA AB Comparison Test
 
 This directory contains a comprehensive experimental setup comparing two fine-tuning approaches for the `meta-llama/Llama-3.2-1B-Instruct` model using the sarcasm dataset.
 
@@ -50,7 +50,7 @@ All other parameters (LoRA settings, training hyperparameters, etc.) are identic
 ### Option 1: Run All Experiments (Recommended)
 
 ```bash
-# Run both experiments sequentially
+# Run both experiments sequentially (includes automatic evaluation)
 python experiments/run_experiments.py
 
 # Run with verbose logging
@@ -77,6 +77,19 @@ python experiments/experiment_a_peft_only/scripts/run_experiment_a.py
 python experiments/experiment_b_peft_ica/scripts/run_experiment_b.py
 ```
 
+### Option 4: Run Evaluation Only
+
+```bash
+# Run evaluation on already trained models
+python experiments/peft_vs_peft-ica/evaluate_models.py
+
+# Run evaluation with custom test size
+python experiments/peft_vs_peft-ica/evaluate_models.py --test-size 0.3
+
+# Run evaluation with custom output directory
+python experiments/peft_vs_peft-ica/evaluate_models.py --output-dir custom_results
+```
+
 ## 📊 Expected Outputs
 
 ### Experiment A Output (`experiment_a_peft_only/output/`)
@@ -94,6 +107,13 @@ python experiments/experiment_b_peft_ica/scripts/run_experiment_b.py
 - `experiment_b.log` - Training logs (includes ICA computation details)
 - `trainer_state.json` - Training state
 - `training_args.bin` - Training arguments
+
+### Evaluation Results (`evaluation_results/`)
+
+- `experiment_a_results.json` - Detailed metrics for PEFT-only model
+- `experiment_b_results.json` - Detailed metrics for PEFT+ICA model
+- `model_comparison.json` - Side-by-side comparison data
+- `evaluation_summary.md` - Human-readable summary report
 
 ### Master Run Logs (`logs/`)
 
@@ -120,6 +140,48 @@ python experiments/experiment_b_peft_ica/scripts/run_experiment_b.py
 | `ica_components` | 20 (unused) | 20 |
 | `ica_percentile` | 98.0 (unused) | 98.0 |
 
+## 📊 Model Evaluation
+
+### Automatic Evaluation
+
+When running both experiments together (`python experiments/run_experiments.py`), the system automatically evaluates both models using comprehensive metrics and generates comparison reports.
+
+### Evaluation Metrics
+
+The evaluation uses HuggingFace's `evaluate` library to assess model performance across multiple dimensions:
+
+#### Text Generation Quality
+
+- **BLEU Score**: Measures n-gram overlap between generated and reference text
+- **ROUGE-1/2/L**: Evaluates recall-oriented text similarity
+- **Perplexity**: Measures how well the model predicts the text
+
+#### Sarcasm-Specific Metrics
+
+- **Sarcasm Correlation**: Correlation between predicted and reference sarcasm intensity
+- **Average Sarcasm Intensity**: Presence of sarcasm indicators in responses
+- **Length Ratio**: Comparison of response lengths to reference answers
+
+#### Response Quality
+
+- **Average Response Length**: Word count statistics
+- **Sample Comparisons**: Side-by-side examples for qualitative analysis
+
+### Interpreting Results
+
+**Better Performance Indicators:**
+
+- Higher BLEU, ROUGE scores (closer to reference text)
+- Lower perplexity (more confident predictions)
+- Higher sarcasm correlation (better sarcasm detection)
+- Length ratio closer to 1.0 (appropriate response length)
+
+**The evaluation summary report (`evaluation_summary.md`) provides:**
+
+- Performance comparison table with percentage improvements
+- Sample outputs for qualitative assessment
+- Clear indication of which model performs better for each metric
+
 ## 🔍 Monitoring & Logs
 
 ### Log Locations
@@ -127,14 +189,17 @@ python experiments/experiment_b_peft_ica/scripts/run_experiment_b.py
 - **Master logs**: `experiments/logs/experiment_run_*.log`
 - **Experiment A logs**: `experiment_a_peft_only/output/experiment_a.log`
 - **Experiment B logs**: `experiment_b_peft_ica/output/experiment_b.log`
+- **Evaluation logs**: Included in master logs when running full experiment suite
 
 ### What to Monitor
 
 - Training loss progression
-- Evaluation metrics
+- Evaluation metrics during training
 - ICA computation time (Experiment B only)
 - Memory usage
 - Training duration differences
+- Model evaluation metrics (BLEU, ROUGE, perplexity)
+- Comparative performance analysis
 
 ## 🚫 Gitignore Coverage
 
@@ -166,7 +231,15 @@ Only configuration files and scripts are tracked in git.
 
 After running experiments:
 
-1. Compare training logs and metrics between experiments
-2. Evaluate model performance on test data
-3. Analyze the impact of ICA masking on convergence
-4. Consider running additional epochs or hyperparameter variations
+1. **Review Evaluation Summary**: Check `evaluation_results/evaluation_summary.md` for comprehensive performance comparison
+2. **Analyze Training Logs**: Compare training metrics and convergence patterns between experiments
+3. **Examine Sample Outputs**: Review qualitative differences in generated sarcastic responses
+4. **Interpret Metrics**: Use the evaluation metrics to understand ICA masking impact:
+   - Text quality improvements (BLEU/ROUGE scores)
+   - Sarcasm detection accuracy (correlation metrics)
+   - Response appropriateness (length ratios)
+5. **Consider Follow-up Experiments**: Based on results, consider:
+   - Different ICA component counts or percentiles
+   - Additional training epochs
+   - Alternative masking strategies
+   - Larger datasets or different domains

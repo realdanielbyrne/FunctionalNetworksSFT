@@ -12,8 +12,8 @@
 # - ICA Masking: Enabled (key mode)
 # =============================================================================
 
-# Model configuration
-model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
+# Model configuration - MODIFIED FOR TEST RUN
+model_name_or_path: "microsoft/DialoGPT-small"  # TEST RUN: Much smaller model
 torch_dtype: "float32"  # Use float32 for MPS compatibility
 
 # Dataset configuration
@@ -30,31 +30,32 @@ lora_alpha: 32          # LoRA alpha scaling
 lora_dropout: 0.1       # LoRA dropout
 lora_target_modules: null  # Auto-detect target modules
 
-# Training Configuration - IDENTICAL TO EXPERIMENT A
-num_train_epochs: 2     # Exactly 2 epochs as specified
-per_device_train_batch_size: 4
-per_device_eval_batch_size: 4
+# Training Configuration - MODIFIED FOR TEST RUN
+max_steps: 5            # TEST RUN: Only 5 steps for validation
+num_train_epochs: 2     # Will be overridden by max_steps
+per_device_train_batch_size: 1  # TEST RUN: Reduced for memory
+per_device_eval_batch_size: 1   # TEST RUN: Reduced for memory
 gradient_accumulation_steps: 1
 learning_rate: 2e-4     # Higher learning rate for PEFT
 weight_decay: 0.001
 warmup_ratio: 0.03
 lr_scheduler_type: "cosine"
 
-# Sequence and Template Configuration - IDENTICAL TO EXPERIMENT A
-max_seq_length: 1024    # Reasonable length for Q&A
+# Sequence and Template Configuration - MODIFIED FOR TEST RUN
+max_seq_length: 256     # TEST RUN: Reduced for memory
 template_format: "auto" # Auto-detect chat template
 
-# Evaluation and Logging - IDENTICAL TO EXPERIMENT A
-logging_steps: 10
-save_steps: 100
-eval_steps: 100
+# Evaluation and Logging - MODIFIED FOR TEST RUN
+logging_steps: 1        # TEST RUN: Log every step
+save_steps: 10          # TEST RUN: Save more frequently
+eval_steps: 3           # TEST RUN: Evaluate after 3 steps
 save_total_limit: 2
 load_best_model_at_end: true
 metric_for_best_model: "eval_loss"
 evaluation_strategy: "steps"
 
-# Memory optimization - IDENTICAL TO EXPERIMENT A
-gradient_checkpointing: true
+# Memory optimization - MODIFIED FOR TEST RUN
+gradient_checkpointing: false  # TEST RUN: Disabled for MPS compatibility
 
 # Monitoring
 use_wandb: false

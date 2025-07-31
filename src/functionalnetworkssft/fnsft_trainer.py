@@ -305,21 +305,36 @@ def compute_ica_masks_for_model(
         return _hook
 
     # attach capture hooks on the MLP *intermediate* output
+    # Use the same logic as apply_ica_masks for consistency
     if hasattr(model, "transformer"):
         blocks = getattr(model.transformer, "h", None) or getattr(
             model.transformer, "blocks", None
         )
+    elif hasattr(model, "model"):
+        blocks = getattr(model.model, "layers", None) or getattr(
+            model.model, "decoder", None
+        )
     else:
-        blocks = getattr(model.model, "layers", None)
+        blocks = None
+
+    if blocks is None:
+        logger.error("Could not find transformer blocks in model for ICA computation")
+        return {}
 
     for i, block in enumerate(blocks):
         # first linear (up-proj) output lies right after activation
-        up_proj = next(
-            m
-            for n, m in block.named_modules()
-            if isinstance(m, nn.Linear) and m.out_features > m.in_features
-        )
-        hooks.append(up_proj.register_forward_hook(capture(i)))
+        up_proj = None
+        for n, m in block.named_modules():
+            if isinstance(m, nn.Linear) and m.out_features > m.in_features:
+                up_proj = m
+                break
+
+        if up_proj is not None:
+            hooks.append(up_proj.register_forward_hook(capture(i)))
+        else:
+            logger.warning(
+                f"No suitable up-projection layer found in block {i}, skipping ICA hook"
+            )
 
     # 2. feed a few mini-batches
     dl = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
@@ -339,24 +354,75 @@ def compute_ica_masks_for_model(
     layer_masks = {}
     for layer_idx, acts in activations.items():
         X = torch.cat(acts, dim=0).flatten(0, 1).numpy()  # [time, neurons]
-        ica = FastICA(n_components=num_components, random_state=0)
-        try:
-            A = ica.fit_transform(
-                X
-            ).T  # components × time  (we only need mixing matrix)
-            mixing = ica.mixing_  # [neurons, components]
-        except ValueError:
-            logger.warning(f"ICA failed on layer {layer_idx}, skipping.")
-            continue
-        # 4. pick top-|percentile| neurons across all components
-        thr = np.percentile(np.abs(mixing), percentile)
-        key_neurons = np.where(np.abs(mixing) >= thr)[0].tolist()
-        if key_neurons:
-            layer_masks[str(layer_idx)] = key_neurons
 
-    logger.info(
-        f"ICA complete – masking {sum(len(v) for v in layer_masks.values())} neurons."
-    )
+        # Check if we have enough data for ICA
+        if X.shape[0] < num_components or X.shape[1] < num_components:
+            logger.warning(
+                f"Insufficient data for ICA on layer {layer_idx} (shape: {X.shape}), skipping."
+            )
+            continue
+
+        # Check for numerical issues
+        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
+            logger.warning(
+                f"NaN or Inf values detected in layer {layer_idx}, skipping ICA."
+            )
+            continue
+
+        # Standardize the data to help with numerical stability
+        X_std = (X - np.mean(X, axis=0)) / (np.std(X, axis=0) + 1e-8)
+
+        # Use a more conservative number of components if needed
+        effective_components = min(num_components, X.shape[0] // 2, X.shape[1] // 2)
+        if effective_components < 2:
+            logger.warning(
+                f"Too few effective components ({effective_components}) for layer {layer_idx}, skipping."
+            )
+            continue
+
+        ica = FastICA(
+            n_components=effective_components, random_state=0, max_iter=100, tol=1e-3
+        )
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                A = ica.fit_transform(X_std).T  # components × time
+                mixing = ica.mixing_  # [neurons, components]
+
+            # Check if ICA converged properly
+            if np.any(np.isnan(mixing)) or np.any(np.isinf(mixing)):
+                logger.warning(
+                    f"ICA produced NaN/Inf values for layer {layer_idx}, skipping."
+                )
+                continue
+
+        except (ValueError, RuntimeWarning, np.linalg.LinAlgError) as e:
+            logger.warning(f"ICA failed on layer {layer_idx}: {str(e)}, skipping.")
+            continue
+
+        # 4. pick top-|percentile| neurons across all components
+        try:
+            thr = np.percentile(np.abs(mixing), percentile)
+            key_neurons = np.where(np.abs(mixing) >= thr)[0].tolist()
+            if key_neurons:
+                layer_masks[str(layer_idx)] = key_neurons
+                logger.debug(f"Layer {layer_idx}: found {len(key_neurons)} key neurons")
+        except Exception as e:
+            logger.warning(
+                f"Failed to compute percentile threshold for layer {layer_idx}: {str(e)}, skipping."
+            )
+            continue
+
+    total_masked_neurons = sum(len(v) for v in layer_masks.values())
+    if total_masked_neurons == 0:
+        logger.warning(
+            "ICA failed to identify any neurons for masking. Training will proceed without masking."
+        )
+    else:
+        logger.info(
+            f"ICA complete – masking {total_masked_neurons} neurons across {len(layer_masks)} layers."
+        )
+
     return layer_masks
 
 
@@ -1058,7 +1124,7 @@ def main():
     parser.add_argument(
         "--model_name_or_path",
         type=str,
-        required=True,
+        required=False,
         help="Path to pretrained model or model identifier",
     )
     parser.add_argument(
@@ -1081,7 +1147,7 @@ def main():
     parser.add_argument(
         "--dataset_name_or_path",
         type=str,
-        required=True,
+        required=False,
         help="Path to dataset file or HuggingFace dataset name",
     )
     parser.add_argument(
@@ -1183,11 +1249,17 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        required=True,
+        required=False,
         help="Output directory for model checkpoints",
     )
     parser.add_argument(
         "--num_train_epochs", type=int, default=3, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=-1,
+        help="Maximum number of training steps (overrides num_train_epochs if > 0)",
     )
     parser.add_argument(
         "--per_device_train_batch_size",
@@ -1352,6 +1424,14 @@ def main():
             if not hasattr(args, key) or getattr(args, key) is None:
                 setattr(args, key, value)
 
+    # Validate required arguments
+    required_args = ["model_name_or_path", "dataset_name_or_path", "output_dir"]
+    missing_args = [arg for arg in required_args if not getattr(args, arg, None)]
+    if missing_args:
+        parser.error(
+            f"The following required arguments are missing: {', '.join(missing_args)}"
+        )
+
     # Create argument dataclasses
     model_args = ModelArguments(
         model_name_or_path=args.model_name_or_path,
@@ -1399,6 +1479,7 @@ def main():
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.num_train_epochs,
+        max_steps=args.max_steps,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -1510,8 +1591,18 @@ def main():
                     percentile=args.ica_percentile,
                     sample_batches=50,
                 )
-            mask_handles = apply_ica_masks(model, mask_dict, mask_mode=args.mask_mode)
-            logger.info(f"Applied functional-network masking: mode={args.mask_mode}")
+
+            if mask_dict:
+                mask_handles = apply_ica_masks(
+                    model, mask_dict, mask_mode=args.mask_mode
+                )
+                logger.info(
+                    f"Applied functional-network masking: mode={args.mask_mode}"
+                )
+            else:
+                logger.warning(
+                    "Could not find transformer blocks – no masking applied."
+                )
         # ------------------------------------------------------
 
         # Create trainer

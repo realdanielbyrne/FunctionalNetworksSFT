@@ -18,11 +18,11 @@ model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
 torch_dtype: "auto"  # Use platform-optimized dtype
 
 # Dataset configuration
-dataset_name_or_path: "datasets/sarcasm.csv"
+dataset_name_or_path: "../../datasets/sarcasm.csv"
 validation_split: 0.1  # 10% for validation
 
 # Output configuration
-output_dir: "experiments/experiment_b_peft_ica/output"
+output_dir: "experiment_b_peft_ica/output"
 
 # PEFT Configuration (LoRA) - IDENTICAL TO EXPERIMENT A
 # PEFT is enabled by default - no need to set peft: true

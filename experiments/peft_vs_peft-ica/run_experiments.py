@@ -9,13 +9,13 @@ This script runs comprehensive fine-tuning experiments comparing two approaches:
 Both experiments use the meta-llama/Llama-3.2-1B-Instruct model and sarcasm dataset.
 
 Usage:
-    python experiments/run_experiments.py [--experiment {a,b,both}] [--verbose]
+    python experiments/peft_vs_peft-ica/run_experiments.py [--experiment {a,b,both}] [--verbose]
 
 Examples:
-    python experiments/run_experiments.py --experiment a      # Run only Experiment A
-    python experiments/run_experiments.py --experiment b      # Run only Experiment B
-    python experiments/run_experiments.py --experiment both   # Run both experiments
-    python experiments/run_experiments.py                     # Run both experiments (default)
+    python experiments/peft_vs_peft-ica/run_experiments.py --experiment a      # Run only Experiment A
+    python experiments/peft_vs_peft-ica/run_experiments.py --experiment b      # Run only Experiment B
+    python experiments/peft_vs_peft-ica/run_experiments.py --experiment both   # Run both experiments
+    python experiments/peft_vs_peft-ica/run_experiments.py                     # Run both experiments (default)
 """
 
 import argparse
@@ -26,11 +26,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Add the src directory to the Python path
-project_root = Path(__file__).parent.parent
-src_path = project_root / "src"
-sys.path.insert(0, str(src_path))
-
 
 # Configure logging
 def setup_logging(verbose=False):
@@ -39,11 +34,11 @@ def setup_logging(verbose=False):
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     # Create logs directory
-    os.makedirs("experiments/logs", exist_ok=True)
+    os.makedirs("../logs", exist_ok=True)
 
     # Create log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = f"experiments/logs/experiment_run_{timestamp}.log"
+    log_file = f"../logs/experiment_run_{timestamp}.log"
 
     logging.basicConfig(
         level=log_level,
@@ -57,6 +52,11 @@ def run_experiment_a():
     """Run Experiment A: PEFT-only fine-tuning"""
     logger = logging.getLogger(__name__)
     logger.info("Starting Experiment A: PEFT-only fine-tuning")
+
+    # Save current directory and change to project root
+    original_cwd = os.getcwd()
+    project_root = Path(__file__).parent.parent.parent
+    os.chdir(project_root)
 
     try:
         # Import and run experiment A
@@ -76,6 +76,9 @@ def run_experiment_a():
     except Exception as e:
         logger.error(f"Experiment A failed: {str(e)}")
         return False
+    finally:
+        # Restore original directory
+        os.chdir(original_cwd)
 
 
 def run_experiment_b():
@@ -110,7 +113,7 @@ def run_evaluation():
 
     try:
         # Import and run evaluation
-        sys.path.insert(0, str(Path(__file__).parent / "peft_vs_peft-ica"))
+        sys.path.insert(0, str(Path(__file__).parent))
         from evaluate_models import main as evaluate_main
 
         # Temporarily modify sys.argv for evaluation
@@ -120,7 +123,7 @@ def run_evaluation():
             "--test-size",
             "0.2",
             "--output-dir",
-            "experiments/peft_vs_peft-ica/evaluation_results",
+            "evaluation_results",
         ]
 
         start_time = time.time()
@@ -224,14 +227,12 @@ def main():
     print(f"\nTotal execution time: {total_time:.2f} seconds")
     print("\nOutput locations:")
     if "experiment_a" in results:
-        print("  Experiment A: experiments/experiment_a_peft_only/output/")
+        print("  Experiment A: experiment_a_peft_only/output/")
     if "experiment_b" in results:
-        print("  Experiment B: experiments/experiment_b_peft_ica/output/")
+        print("  Experiment B: experiment_b_peft_ica/output/")
     if "evaluation" in results and results["evaluation"]:
-        print("  Evaluation Results: experiments/peft_vs_peft-ica/evaluation_results/")
-        print(
-            "  Summary Report: experiments/peft_vs_peft-ica/evaluation_results/evaluation_summary.md"
-        )
+        print("  Evaluation Results: evaluation_results/")
+        print("  Summary Report: evaluation_results/evaluation_summary.md")
 
     # Exit with appropriate code
     if all(results.values()):

@@ -242,7 +242,7 @@ def apply_ica_masks(
         return handles
 
     for layer_idx, block in enumerate(blocks):
-        for name, module in block.modules():
+        for name, module in block.named_modules():
             # pick the *second* Linear in the MLP (in_features > hidden_size)
             # Identify linear or equivalent modules by type and shape
             if isinstance(module, torch.nn.Linear):
@@ -282,12 +282,18 @@ def compute_ica_masks_for_model(
     num_components: int = 20,
     percentile: float = 98.0,
     sample_batches: int = 100,
+    clip_activations: bool = False,
 ):
     """
     Lightweight, on-the-fly ICA (FastICA) over MLP activations.
     Adapted from the pseudocode in the paper  [oai_citation:2‡ICA-Based Functional Network Masking for LLM Fine-Tuning.pdf](file-service://file-78U49V8bsfQqVCbLViHD19).
     Only a *sample* of the dataset is streamed to limit RAM/CPU use.
     Returns a `mask_dict` ready for `apply_ica_masks`.
+
+    Args:
+        clip_activations: If True, applies aggressive outlier removal and clipping for numerical stability.
+                         Disabled by default since the original numerical issues were due to analyzing
+                         untrained LoRA adapter weights instead of base model activations.
     """
     logger.info("Running ICA to discover functional networks – this can be slow…")
     model.eval()
@@ -300,7 +306,18 @@ def compute_ica_masks_for_model(
     def capture(layer_idx):
         def _hook(_, __, out):
             # out: [B, T, d_int]  -> flatten B*T
-            activations[layer_idx].append(out.detach().cpu().float())
+            # Convert to float32 for numerical stability in ICA computation
+            out_float = out.detach().cpu().float()
+
+            # Debug: Check what we're actually capturing
+            if len(activations[layer_idx]) == 0:  # First capture for this layer
+                logger.debug(
+                    f"Layer {layer_idx}: First capture - shape: {out_float.shape}, "
+                    f"range: [{torch.min(out_float):.6f}, {torch.max(out_float):.6f}], "
+                    f"mean: {torch.mean(out_float):.6f}, std: {torch.std(out_float):.6f}"
+                )
+
+            activations[layer_idx].append(out_float)
 
         return _hook
 
@@ -321,20 +338,68 @@ def compute_ica_masks_for_model(
         logger.error("Could not find transformer blocks in model for ICA computation")
         return {}
 
+    hooks_attached = 0
     for i, block in enumerate(blocks):
-        # first linear (up-proj) output lies right after activation
+        # Hook into the base model layers, not LoRA adapters
         up_proj = None
-        for n, m in block.named_modules():
-            if isinstance(m, nn.Linear) and m.out_features > m.in_features:
-                up_proj = m
-                break
+        logger.debug(f"Block {i}: Searching for base model linear layers...")
+
+        # For GPT-style models, look for the MLP layers
+        if hasattr(block, "mlp"):
+            mlp = block.mlp
+            # Look for the first linear layer in MLP (usually c_fc for GPT models)
+            if hasattr(mlp, "c_fc"):
+                # Get the base layer, not the LoRA wrapper
+                base_layer = mlp.c_fc
+                if hasattr(base_layer, "base_layer"):
+                    # This is a LoRA-wrapped layer, get the original
+                    up_proj = base_layer.base_layer
+                    logger.debug(f"  Found base layer: c_fc (base_layer)")
+                else:
+                    # This is the original layer
+                    up_proj = base_layer
+                    logger.debug(f"  Found original layer: c_fc")
+            elif hasattr(mlp, "up_proj"):
+                # Llama-style models
+                base_layer = mlp.up_proj
+                if hasattr(base_layer, "base_layer"):
+                    up_proj = base_layer.base_layer
+                    logger.debug(f"  Found base layer: up_proj (base_layer)")
+                else:
+                    up_proj = base_layer
+                    logger.debug(f"  Found original layer: up_proj")
+
+        # Fallback: search for any suitable linear layer in the base model
+        if up_proj is None:
+            for n, m in block.named_modules():
+                # Skip LoRA adapter layers
+                if "lora" in n.lower() or "adapter" in n.lower():
+                    continue
+
+                # Check for Linear layers
+                if isinstance(m, nn.Linear) and m.out_features > m.in_features:
+                    up_proj = m
+                    logger.debug(f"  Found fallback layer '{n}'")
+                    break
+                # Check for Conv1D layers (used in GPT models)
+                elif hasattr(m, "weight") and len(m.weight.shape) == 2:
+                    # Conv1D layer - weight shape is [out_features, in_features]
+                    in_feat, out_feat = m.weight.shape[1], m.weight.shape[0]
+                    if out_feat > in_feat:
+                        up_proj = m
+                        logger.debug(f"  Found fallback Conv1D layer '{n}'")
+                        break
 
         if up_proj is not None:
             hooks.append(up_proj.register_forward_hook(capture(i)))
+            hooks_attached += 1
+            logger.debug(f"Attached hook to block {i} base layer")
         else:
             logger.warning(
-                f"No suitable up-projection layer found in block {i}, skipping ICA hook"
+                f"No suitable base model layer found in block {i}, skipping ICA hook"
             )
+
+    logger.debug(f"Total hooks attached: {hooks_attached}")
 
     # 2. feed a few mini-batches
     dl = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
@@ -362,15 +427,66 @@ def compute_ica_masks_for_model(
             )
             continue
 
-        # Check for numerical issues
+        # More robust numerical checks and preprocessing
+        logger.debug(f"Layer {layer_idx}: Raw data shape: {X.shape}, dtype: {X.dtype}")
+        logger.debug(
+            f"Layer {layer_idx}: Raw data range: [{np.min(X):.6f}, {np.max(X):.6f}]"
+        )
+        logger.debug(
+            f"Layer {layer_idx}: NaN count: {np.sum(np.isnan(X))}, Inf count: {np.sum(np.isinf(X))}"
+        )
+
+        # Remove any extreme outliers that could cause numerical issues
+        X_finite = X[
+            np.isfinite(X).all(axis=1)
+        ]  # Keep only rows with all finite values
+        if X_finite.shape[0] < X.shape[0] * 0.8:  # If we lose more than 20% of data
+            logger.warning(
+                f"Too many non-finite values in layer {layer_idx} ({X.shape[0] - X_finite.shape[0]} / {X.shape[0]}), skipping ICA."
+            )
+            continue
+        X = X_finite
+
+        # Check for numerical issues after cleaning
         if np.any(np.isnan(X)) or np.any(np.isinf(X)):
             logger.warning(
-                f"NaN or Inf values detected in layer {layer_idx}, skipping ICA."
+                f"NaN or Inf values still present in layer {layer_idx} after cleaning, skipping ICA."
             )
             continue
 
-        # Standardize the data to help with numerical stability
-        X_std = (X - np.mean(X, axis=0)) / (np.std(X, axis=0) + 1e-8)
+        # Optional outlier removal and clipping (disabled by default)
+        if clip_activations:
+            # More aggressive outlier removal - remove extreme values
+            X_percentiles = np.percentile(X, [1, 99], axis=0)
+            X_clipped = np.clip(X, X_percentiles[0], X_percentiles[1])
+            logger.debug(
+                f"Layer {layer_idx}: Applied outlier clipping to 1st-99th percentiles"
+            )
+        else:
+            X_clipped = X
+
+        # Standard standardization (zero-mean, unit-variance)
+        X_mean = np.mean(X_clipped, axis=0)
+        X_std_dev = np.std(X_clipped, axis=0)
+        # Avoid division by very small numbers
+        X_std_dev = np.maximum(X_std_dev, 1e-8)  # More conservative threshold
+        X_std = (X_clipped - X_mean) / X_std_dev
+
+        # Optional final clipping for numerical stability (disabled by default)
+        if clip_activations:
+            X_std = np.clip(X_std, -5.0, 5.0)
+            logger.debug(f"Layer {layer_idx}: Applied final clipping to [-5.0, 5.0]")
+
+        # Final check after all preprocessing
+        if np.any(np.isnan(X_std)) or np.any(np.isinf(X_std)):
+            logger.warning(
+                f"NaN or Inf values in preprocessed data for layer {layer_idx}, skipping ICA."
+            )
+            continue
+
+        logger.debug(
+            f"Layer {layer_idx}: Preprocessed data range: [{np.min(X_std):.6f}, {np.max(X_std):.6f}]"
+        )
 
         # Use a more conservative number of components if needed
         effective_components = min(num_components, X.shape[0] // 2, X.shape[1] // 2)
@@ -422,6 +538,21 @@ def compute_ica_masks_for_model(
         logger.info(
             f"ICA complete – masking {total_masked_neurons} neurons across {len(layer_masks)} layers."
         )
+
+    # Clean up memory after ICA computation
+    logger.info("Cleaning up ICA computation memory...")
+    del activations
+    # Also clean up any other large variables
+    import gc
+
+    gc.collect()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        logger.info("Cleared CUDA cache")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+        logger.info("Cleared MPS cache")
 
     return layer_masks
 
@@ -644,11 +775,19 @@ def load_model_and_tokenizer(
         torch_dtype = get_recommended_dtype()
         logger.info(f"Auto-selected dtype: {torch_dtype}")
     else:
-        torch_dtype = torch.float16
-        if model_args.torch_dtype == "bfloat16":
+        # Parse the specified dtype string
+        if model_args.torch_dtype == "float16":
+            torch_dtype = torch.float16
+        elif model_args.torch_dtype == "bfloat16":
             torch_dtype = torch.bfloat16
         elif model_args.torch_dtype == "float32":
             torch_dtype = torch.float32
+        else:
+            logger.warning(
+                f"Unknown torch_dtype '{model_args.torch_dtype}', defaulting to float16"
+            )
+            torch_dtype = torch.float16
+        logger.info(f"Using specified dtype: {torch_dtype}")
 
     # Get authentication token
     auth_token = None
@@ -1419,10 +1558,44 @@ def main():
     # Load configuration from YAML if provided
     if args.config:
         config = load_config_from_yaml(args.config)
-        # Override command line args with config values
+        # Config file values override defaults, but CLI args override config
+        # Store original CLI args that were explicitly provided
+        original_argv = sys.argv[1:]  # Exclude script name
+        explicitly_provided = set()
+
+        # Parse which arguments were explicitly provided on command line
+        i = 0
+        while i < len(original_argv):
+            arg = original_argv[i]
+            if arg.startswith("--"):
+                arg_name = arg[2:].replace("-", "_")
+                explicitly_provided.add(arg_name)
+                # Skip the value if this argument takes one
+                for action in parser._actions:
+                    if action.dest == arg_name and action.nargs != 0:
+                        i += 1  # Skip the value
+                        break
+            i += 1
+
+        # Apply config values, but don't override explicitly provided CLI args
         for key, value in config.items():
-            if not hasattr(args, key) or getattr(args, key) is None:
-                setattr(args, key, value)
+            if key not in explicitly_provided:
+                # YAML already handles type conversion correctly, so use the value as-is
+                # unless we need special handling
+                converted_value = value
+
+                # Handle special cases where YAML conversion might need adjustment
+                if value is None:
+                    # YAML null values are already None, keep them as None
+                    converted_value = None
+                elif isinstance(value, str) and value.lower() == "null":
+                    # Handle string "null" as None
+                    converted_value = None
+
+                logger.debug(
+                    f"Setting {key} from config: {converted_value} (type: {type(converted_value)})"
+                )
+                setattr(args, key, converted_value)
 
     # Validate required arguments
     required_args = ["model_name_or_path", "dataset_name_or_path", "output_dir"]
@@ -1591,6 +1764,14 @@ def main():
                     percentile=args.ica_percentile,
                     sample_batches=50,
                 )
+
+                # Save the computed mask to disk for future use and memory conservation
+                if mask_dict:
+                    mask_save_path = os.path.join(args.output_dir, "ica_mask.json")
+                    os.makedirs(args.output_dir, exist_ok=True)
+                    with open(mask_save_path, "w") as f:
+                        json.dump(mask_dict, f, indent=2)
+                    logger.info(f"Saved ICA mask to {mask_save_path} for future use")
 
             if mask_dict:
                 mask_handles = apply_ica_masks(

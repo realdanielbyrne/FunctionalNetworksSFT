@@ -316,3 +316,39 @@ adapter_*.safetensors
 adapter_config.json
 **/adapter_*.safetensors
 **/adapter_config.json
+
+# -------------------------
+# Experiment Artifacts
+# -------------------------
+# Experiment output directories
+experiments/*/output/
+experiments/**/output/
+
+# Experiment logs
+experiments/*/output/*.log
+experiments/**/output/*.log
+experiment_*.log
+
+# Experiment model artifacts
+experiments/*/output/checkpoint-*/
+experiments/**/output/checkpoint-*/
+experiments/*/output/final_model/
+experiments/**/output/final_model/
+experiments/*/output/*.safetensors
+experiments/**/output/*.safetensors
+experiments/*/output/*.bin
+experiments/**/output/*.bin
+
+# Experiment training artifacts
+experiments/*/output/runs/
+experiments/**/output/runs/
+experiments/*/output/wandb/
+experiments/**/output/wandb/
+experiments/*/output/.tensorboard/
+experiments/**/output/.tensorboard/
+
+# Experiment temporary files
+experiments/*/output/*.tmp
+experiments/**/output/*.tmp
+experiments/*/output/*.cache
+experiments/**/output/*.cache

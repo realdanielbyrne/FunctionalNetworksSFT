@@ -1,0 +1,82 @@
+# =============================================================================
+# Experiment A: PEFT-Only Fine-Tuning Configuration
+# =============================================================================
+# This configuration is for fine-tuning meta-llama/Llama-3.2-1B-Instruct
+# using PEFT (LoRA) only, without ICA masking.
+# 
+# Experiment Parameters:
+# - Model: meta-llama/Llama-3.2-1B-Instruct
+# - Dataset: datasets/sarcasm.csv
+# - Training Method: PEFT (LoRA) only
+# - Epochs: 2
+# - ICA Masking: Disabled
+# =============================================================================
+
+# Model configuration
+model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
+torch_dtype: "float32"  # Use float32 for MPS compatibility
+
+# Dataset configuration
+dataset_name_or_path: "datasets/sarcasm.csv"
+validation_split: 0.1  # 10% for validation
+
+# Output configuration
+output_dir: "experiments/experiment_a_peft_only/output"
+
+# PEFT Configuration (LoRA)
+# PEFT is enabled by default - no need to set peft: true
+lora_r: 16              # LoRA rank
+lora_alpha: 32          # LoRA alpha scaling
+lora_dropout: 0.1       # LoRA dropout
+lora_target_modules: null  # Auto-detect target modules
+
+# Training Configuration
+num_train_epochs: 2     # Exactly 2 epochs as specified
+per_device_train_batch_size: 4
+per_device_eval_batch_size: 4
+gradient_accumulation_steps: 1
+learning_rate: 2e-4     # Higher learning rate for PEFT
+weight_decay: 0.001
+warmup_ratio: 0.03
+lr_scheduler_type: "cosine"
+
+# Sequence and Template Configuration
+max_seq_length: 1024    # Reasonable length for Q&A
+template_format: "auto" # Auto-detect chat template
+
+# Evaluation and Logging
+logging_steps: 10
+save_steps: 100
+eval_steps: 100
+save_total_limit: 2
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+evaluation_strategy: "steps"
+
+# Memory optimization
+gradient_checkpointing: true
+
+# Monitoring
+use_wandb: false
+wandb_project: "experiment-a-peft-only"
+
+# Hub upload (adapters only)
+push_to_hub: false
+hub_repo_id: "experiment-a-peft-sarcasm"
+hub_commit_message: "Experiment A: PEFT-only sarcasm fine-tuning"
+hub_private: false
+push_adapter_only: true  # Only upload adapters for PEFT
+
+# Additional options
+resume_from_checkpoint: null
+convert_to_gguf: false
+gguf_quantization: "q4_0"
+
+# ICA masking (DISABLED for Experiment A)
+mask_mode: null         # No masking for PEFT-only experiment
+ica_mask_path: null
+ica_components: 20      # Not used but kept for consistency
+ica_percentile: 98.0    # Not used but kept for consistency
+
+# Authentication
+use_auth_token: true    # For gated model access

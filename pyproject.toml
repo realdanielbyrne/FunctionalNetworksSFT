@@ -38,6 +38,10 @@ dependencies = [
     "isort>=5.12.0",               # Import sorting
     "mypy>=1.0.0",                 # Type checking
     "openai (>=1.97.1,<2.0.0)",
+    "lm-eval (>=0.4.9,<0.5.0)",
+    "evaluate (>=0.4.5,<0.5.0)",
+    "nltk (>=3.9.1,<4.0.0)",
+    "rouge-score (>=0.1.2,<0.2.0)",
 ]
 
 [project.scripts]

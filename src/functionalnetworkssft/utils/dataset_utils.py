@@ -31,6 +31,12 @@ class DatasetFormatter:
             ),
             "response": item["output"],
         },
+        # System-user-assistant format (e.g., Josephgflowers/Finance-Instruct-500k)
+        (
+            "assistant",
+            "system",
+            "user",
+        ): lambda item: DatasetFormatter._convert_system_user_assistant_format(item),
         # Prompt-completion formats
         ("prompt", "completion"): lambda item: {
             "instruction": item["prompt"],
@@ -94,6 +100,7 @@ class DatasetFormatter:
             ("instruction", "input", "output"),
             ("instruction", "response"),
             ("instruction", "output"),
+            ("assistant", "system", "user"),  # System-user-assistant format
             ("prompt", "completion"),
             ("prompt", "response"),
             ("question", "answer"),
@@ -164,6 +171,32 @@ class DatasetFormatter:
         response = "\n".join(assistant_messages) if assistant_messages else ""
 
         return {"instruction": instruction, "response": response}
+
+    @staticmethod
+    def _convert_system_user_assistant_format(item: Dict[str, Any]) -> Dict[str, str]:
+        """Convert system-user-assistant format to instruction-response format."""
+        system_content = item.get("system", "")
+        user_content = item.get("user", "")
+        assistant_content = item.get("assistant", "")
+
+        # Handle empty, null, or missing system field
+        if (
+            not system_content
+            or system_content is None
+            or not str(system_content).strip()
+        ):
+            system_content = "You are a helpful assistant which thinks step by step when responding to a user."
+
+        # Combine system prompt with user input to form the instruction
+        if str(system_content).strip():
+            instruction = f"{str(system_content).strip()}\n\n{user_content}"
+        else:
+            instruction = user_content
+
+        return {
+            "instruction": instruction,
+            "response": assistant_content,
+        }
 
     @staticmethod
     def _infer_and_convert(item: Dict[str, Any], format_keys: tuple) -> Dict[str, str]:

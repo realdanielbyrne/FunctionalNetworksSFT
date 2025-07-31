@@ -713,6 +713,18 @@ def adjust_training_args_for_mode(
     training_args: TrainingArguments, use_peft: bool
 ) -> TrainingArguments:
     """Adjust training arguments based on whether PEFT or full fine-tuning is used."""
+    # Check if we're on MPS (Apple Silicon)
+    device, _ = get_optimal_device()
+    is_mps = device.type == "mps"
+
+    if use_peft and is_mps:
+        # PEFT on MPS has gradient computation issues with gradient checkpointing
+        if training_args.gradient_checkpointing:
+            logger.warning(
+                "Disabling gradient checkpointing for PEFT on MPS due to gradient computation issues"
+            )
+            training_args.gradient_checkpointing = False
+
     if not use_peft:
         # For full fine-tuning, we might want to adjust some parameters
         logger.info("Adjusting training arguments for full parameter fine-tuning")
@@ -730,12 +742,16 @@ def adjust_training_args_for_mode(
             )
             training_args.learning_rate = new_lr
 
-        # Ensure gradient checkpointing is enabled for memory efficiency
-        if not training_args.gradient_checkpointing:
+        # Ensure gradient checkpointing is enabled for memory efficiency (except on MPS if problematic)
+        if not training_args.gradient_checkpointing and not is_mps:
             logger.info(
                 "Enabling gradient checkpointing for full fine-tuning memory efficiency"
             )
             training_args.gradient_checkpointing = True
+        elif is_mps:
+            logger.info(
+                "Gradient checkpointing may cause issues on MPS - keeping current setting"
+            )
 
         # Adjust warmup ratio for full fine-tuning
         if training_args.warmup_ratio == 0.03:  # Default value

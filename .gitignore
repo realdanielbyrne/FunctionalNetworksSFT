@@ -292,3 +292,27 @@ cython_debug/
 # Add any project-specific files or directories here
 # Example: custom config files, local scripts, etc.
 .venv/
+
+# Demo and training output directories
+demo_output/
+**/demo_output/
+output/
+models/
+**/models/
+
+# Training artifacts and logs
+*.log
+sft_training.log
+training_*.log
+
+# Model checkpoints and intermediate files
+checkpoint-*/
+**/checkpoint-*/
+final_model/
+**/final_model/
+
+# Adapter files (PEFT outputs)
+adapter_*.safetensors
+adapter_config.json
+**/adapter_*.safetensors
+**/adapter_config.json

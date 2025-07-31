@@ -20,12 +20,17 @@ import logging
 
 from functionalnetworkssft.fnsft_trainer import main as fnsft_main
 
+# Ensure output directory exists before configuring logging
+os.makedirs("experiments/peft_vs_peft-ica/experiment_b_peft_ica/output", exist_ok=True)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("experiment_b_peft_ica/output/experiment_b.log"),
+        logging.FileHandler(
+            "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/experiment_b.log"
+        ),
         logging.StreamHandler(),
     ],
 )
@@ -40,7 +45,7 @@ def run_experiment_b():
     logger.info("EXPERIMENT B: PEFT + ICA MASKING FINE-TUNING")
     logger.info("=" * 80)
     logger.info("Model: meta-llama/Llama-3.2-1B-Instruct")
-    logger.info("Dataset: ../../datasets/sarcasm.csv")
+    logger.info("Dataset: datasets/sarcasm.csv")
     logger.info("Method: PEFT (LoRA) + ICA masking")
     logger.info("Epochs: 2")
     logger.info("ICA Masking: ENABLED (key mode)")
@@ -49,7 +54,7 @@ def run_experiment_b():
     logger.info("=" * 80)
 
     # Set up the configuration file path
-    config_path = "experiment_b_peft_ica/config/experiment_b_config.yaml"
+    config_path = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml"
 
     # Verify configuration file exists
     if not os.path.exists(config_path):
@@ -57,14 +62,13 @@ def run_experiment_b():
         return False
 
     # Verify dataset exists
-    dataset_path = "../../datasets/sarcasm.csv"
+    dataset_path = "datasets/sarcasm.csv"
     if not os.path.exists(dataset_path):
         logger.error(f"Dataset file not found: {dataset_path}")
         return False
 
-    # Create output directory if it doesn't exist
-    output_dir = "experiment_b_peft_ica/output"
-    os.makedirs(output_dir, exist_ok=True)
+    # Set output directory
+    output_dir = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output"
 
     # Simulate command line arguments for the fnsft_trainer
     original_argv = sys.argv.copy()
@@ -94,11 +98,15 @@ if __name__ == "__main__":
     success = run_experiment_b()
     if success:
         print("\n✅ Experiment B completed successfully!")
-        print("📁 Check experiment_b_peft_ica/output/ for results")
+        print(
+            "📁 Check experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/ for results"
+        )
         print("\n💡 To run evaluation comparing both models, use:")
-        print("   python evaluate_models.py")
+        print("   python experiments/peft_vs_peft-ica/evaluate_models.py")
         print("   (Note: Both experiments A and B must be completed first)")
     else:
         print("\n❌ Experiment B failed!")
-        print("📋 Check experiment_b_peft_ica/output/experiment_b.log for details")
+        print(
+            "📋 Check experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/experiment_b.log for details"
+        )
         sys.exit(1)

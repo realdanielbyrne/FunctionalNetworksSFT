@@ -18,11 +18,11 @@ model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
 torch_dtype: "auto"  # Use platform-optimized dtype
 
 # Dataset configuration
-dataset_name_or_path: "../../datasets/sarcasm.csv"
+dataset_name_or_path: "datasets/sarcasm.csv"
 validation_split: 0.1  # 10% for validation
 
 # Output configuration
-output_dir: "experiment_a_peft_only/output"
+output_dir: "experiments/peft_vs_peft-ica/experiment_a_peft_only/output"
 
 # PEFT Configuration (LoRA)
 # PEFT is enabled by default - no need to set peft: true
@@ -37,7 +37,7 @@ num_train_epochs: 2     # Exactly 2 epochs as specified
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 1
 gradient_accumulation_steps: 1
-learning_rate: 2e-4     # Higher learning rate for PEFT
+learning_rate: 0.0002   # Higher learning rate for PEFT
 weight_decay: 0.001
 warmup_ratio: 0.03
 lr_scheduler_type: "cosine"

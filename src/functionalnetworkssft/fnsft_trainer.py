@@ -323,14 +323,29 @@ def compute_ica_masks_for_model(
 
     # attach capture hooks on the MLP *intermediate* output
     # Use the same logic as apply_ica_masks for consistency
-    if hasattr(model, "transformer"):
-        blocks = getattr(model.transformer, "h", None) or getattr(
-            model.transformer, "blocks", None
+
+    # Handle PEFT models - get the actual base model for ICA computation
+    # IMPORTANT: We use the base model because LoRA adapters are blank at training start
+    actual_model = model
+    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+        # PEFT model: model.base_model.model is the actual transformer
+        actual_model = model.base_model.model
+    elif hasattr(model, "base_model"):
+        # Some PEFT configurations: model.base_model is the actual transformer
+        actual_model = model.base_model
+
+    # Now find transformer blocks in the actual model
+    if hasattr(actual_model, "transformer"):
+        blocks = getattr(actual_model.transformer, "h", None) or getattr(
+            actual_model.transformer, "blocks", None
         )
-    elif hasattr(model, "model"):
-        blocks = getattr(model.model, "layers", None) or getattr(
-            model.model, "decoder", None
+    elif hasattr(actual_model, "model"):
+        blocks = getattr(actual_model.model, "layers", None) or getattr(
+            actual_model.model, "decoder", None
         )
+    elif hasattr(actual_model, "layers"):
+        # Direct access to layers (some model architectures)
+        blocks = actual_model.layers
     else:
         blocks = None
 
@@ -414,11 +429,15 @@ def compute_ica_masks_for_model(
 
     for h in hooks:
         h.remove()
+    logger.info("Removed activation capture hooks")
 
     # 3. concatenate and run ICA
+    logger.info(f"Processing activations for {len(activations)} layers...")
     layer_masks = {}
     for layer_idx, acts in activations.items():
+        logger.info(f"Layer {layer_idx}: Processing {len(acts)} activation batches...")
         X = torch.cat(acts, dim=0).flatten(0, 1).numpy()  # [time, neurons]
+        logger.info(f"Layer {layer_idx}: Concatenated data shape: {X.shape}")
 
         # Check if we have enough data for ICA
         if X.shape[0] < num_components or X.shape[1] < num_components:
@@ -490,20 +509,24 @@ def compute_ica_masks_for_model(
 
         # Use a more conservative number of components if needed
         effective_components = min(num_components, X.shape[0] // 2, X.shape[1] // 2)
+        logger.info(f"Layer {layer_idx}: Using {effective_components} ICA components")
         if effective_components < 2:
             logger.warning(
                 f"Too few effective components ({effective_components}) for layer {layer_idx}, skipping."
             )
             continue
 
+        logger.info(f"Layer {layer_idx}: Starting FastICA computation...")
         ica = FastICA(
             n_components=effective_components, random_state=0, max_iter=100, tol=1e-3
         )
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
+                logger.info(f"Layer {layer_idx}: Running ICA fit_transform...")
                 A = ica.fit_transform(X_std).T  # components × time
                 mixing = ica.mixing_  # [neurons, components]
+                logger.info(f"Layer {layer_idx}: ICA completed successfully")
 
             # Check if ICA converged properly
             if np.any(np.isnan(mixing)) or np.any(np.isinf(mixing)):

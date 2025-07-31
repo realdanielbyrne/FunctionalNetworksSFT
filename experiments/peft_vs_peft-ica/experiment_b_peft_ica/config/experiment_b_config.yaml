@@ -78,7 +78,7 @@ gguf_quantization: "q4_0"
 # ICA masking (ENABLED for Experiment B) - THE ONLY DIFFERENCE
 mask_mode: "key"        # Enable ICA masking in "key" mode
 ica_mask_path: null     # Compute masks on-the-fly
-ica_components: 20      # Number of ICA components
+ica_components: 10      # Number of ICA components
 ica_percentile: 98.0    # Percentile threshold for neuron selection
 
 # Authentication

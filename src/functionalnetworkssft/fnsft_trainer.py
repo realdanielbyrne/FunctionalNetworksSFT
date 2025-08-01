@@ -275,6 +275,100 @@ def apply_ica_masks(
 # ------------------------------------------------------------
 
 
+def parse_layer_specification(layer_spec: str, total_layers: int) -> list[int]:
+    """
+    Parse layer specification string into a list of layer indices.
+
+    Args:
+        layer_spec: String specifying layers (e.g., "0", "0,3,7", "0:4,5:6,9:", "0,2:5,8")
+        total_layers: Total number of layers in the model
+
+    Returns:
+        List of layer indices that should receive ICA masking
+
+    Raises:
+        ValueError: If the specification format is invalid
+    """
+    if not layer_spec or not layer_spec.strip():
+        raise ValueError("Layer specification cannot be empty")
+
+    layer_indices = set()
+
+    # Split by comma to handle multiple specifications
+    parts = [part.strip() for part in layer_spec.split(",")]
+
+    for part in parts:
+        if not part:
+            continue
+
+        if ":" in part:
+            # Handle range specification (e.g., "0:4", ":3", "5:", "2:8")
+            try:
+                start_str, end_str = part.split(":", 1)
+
+                # Parse start index
+                if start_str == "":
+                    start = 0
+                else:
+                    start = int(start_str)
+                    if start < 0:
+                        raise ValueError(f"Start index cannot be negative: {start}")
+
+                # Parse end index
+                if end_str == "":
+                    end = total_layers
+                else:
+                    end = int(end_str)
+                    if end < 0:
+                        raise ValueError(f"End index cannot be negative: {end}")
+
+                # Validate range
+                if start >= total_layers:
+                    raise ValueError(
+                        f"Start index {start} exceeds total layers {total_layers}"
+                    )
+                if end > total_layers:
+                    raise ValueError(
+                        f"End index {end} exceeds total layers {total_layers}"
+                    )
+                if start >= end:
+                    raise ValueError(f"Invalid range: start {start} >= end {end}")
+
+                # Add range to set
+                layer_indices.update(range(start, end))
+
+            except ValueError as e:
+                if "invalid literal for int()" in str(e):
+                    raise ValueError(
+                        f"Invalid range format: '{part}'. Expected format like '0:4', ':3', '5:', etc."
+                    )
+                else:
+                    raise
+        else:
+            # Handle single layer specification
+            try:
+                layer_idx = int(part)
+                if layer_idx < 0:
+                    raise ValueError(f"Layer index cannot be negative: {layer_idx}")
+                if layer_idx >= total_layers:
+                    raise ValueError(
+                        f"Layer index {layer_idx} exceeds total layers {total_layers}"
+                    )
+                layer_indices.add(layer_idx)
+            except ValueError as e:
+                if "invalid literal for int()" in str(e):
+                    raise ValueError(
+                        f"Invalid layer index: '{part}'. Expected integer."
+                    )
+                else:
+                    raise
+
+    if not layer_indices:
+        raise ValueError("No valid layer indices found in specification")
+
+    return sorted(list(layer_indices))
+
+
 def compute_ica_masks_for_model(
     model: PreTrainedModel,
     dataset: Dataset,
@@ -283,6 +377,7 @@ def compute_ica_masks_for_model(
     percentile: float = 98.0,
     sample_batches: int = 100,
     clip_activations: bool = False,
+    target_layers: list[int] | None = None,
 ):
     """
     Lightweight, on-the-fly ICA (FastICA) over MLP activations.
@@ -291,11 +386,25 @@ def compute_ica_masks_for_model(
     Returns a `mask_dict` ready for `apply_ica_masks`.
 
     Args:
+        model: The transformer model to analyze
+        dataset: Dataset to sample activations from
+        tokenizer: Tokenizer for the model
+        num_components: Number of ICA components to extract
+        percentile: Percentile threshold for neuron selection
+        sample_batches: Number of batches to sample for ICA
+        clip_activations: Whether to clip extreme activation values
+        target_layers: List of layer indices to process. If None, process all layers.
+
+    Args:
         clip_activations: If True, applies aggressive outlier removal and clipping for numerical stability.
                          Disabled by default since the original numerical issues were due to analyzing
                          untrained LoRA adapter weights instead of base model activations.
     """
     logger.info("Running ICA to discover functional networks – this can be slow…")
+    if target_layers is not None:
+        logger.info(f"ICA will be applied only to layers: {target_layers}")
+    else:
+        logger.info("ICA will be applied to all layers (default behavior)")
     model.eval()
     device = next(model.parameters()).device
 
@@ -355,6 +464,11 @@ def compute_ica_masks_for_model(
 
     hooks_attached = 0
     for i, block in enumerate(blocks):
+        # Skip layers not in target_layers if filtering is enabled
+        if target_layers is not None and i not in target_layers:
+            logger.debug(f"Block {i}: Skipping (not in target layers)")
+            continue
+
         # Hook into the base model layers, not LoRA adapters
         up_proj = None
         logger.debug(f"Block {i}: Searching for base model linear layers...")
@@ -1604,6 +1718,12 @@ def main():
         default=98.0,
         help="A float argument defaulting to 98.0 that sets the percentile threshold (valid range 0-100) for selecting neurons within each component when ICA is executed on-the-fly.",
     )
+    parser.add_argument(
+        "--ica_mask_layers",
+        type=str,
+        default=None,
+        help="Specify which transformer layers should have ICA masking applied. Supports single layers ('0'), multiple layers ('0,3,7'), ranges ('0:4,5:6,9:'), and mixed formats ('0,2:5,8'). If not provided, ICA masking is applied to all layers (default behavior).",
+    )
 
     args = parser.parse_args()
     print(args.hub_token)
@@ -1800,10 +1920,69 @@ def main():
         # ---------- NEW: functional-network masking ----------
         mask_handles = []
         if args.mask_mode is not None:
+            # Parse layer specification if provided
+            target_layers = None
+            if args.ica_mask_layers is not None:
+                # Determine total number of layers in the model
+                total_layers = 0
+                actual_model = model
+                if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+                    actual_model = model.base_model.model
+                elif hasattr(model, "base_model"):
+                    actual_model = model.base_model
+
+                # Count transformer blocks
+                if hasattr(actual_model, "transformer"):
+                    blocks = getattr(actual_model.transformer, "h", None) or getattr(
+                        actual_model.transformer, "blocks", None
+                    )
+                elif hasattr(actual_model, "model"):
+                    blocks = getattr(actual_model.model, "layers", None) or getattr(
+                        actual_model.model, "decoder", None
+                    )
+                elif hasattr(actual_model, "layers"):
+                    blocks = actual_model.layers
+                else:
+                    blocks = None
+
+                if blocks is not None:
+                    total_layers = len(blocks)
+                    try:
+                        target_layers = parse_layer_specification(
+                            args.ica_mask_layers, total_layers
+                        )
+                        logger.info(
+                            f"Parsed layer specification '{args.ica_mask_layers}' -> layers {target_layers}"
+                        )
+                    except ValueError as e:
+                        logger.error(
+                            f"Invalid layer specification '{args.ica_mask_layers}': {e}"
+                        )
+                        raise
+                else:
+                    logger.error(
+                        "Could not determine model architecture for layer specification"
+                    )
+                    raise ValueError(
+                        "Unable to parse layer specification: unknown model architecture"
+                    )
+
             if args.ica_mask_path:
                 with open(args.ica_mask_path) as f:
                     mask_dict = json.load(f)
                 logger.info(f"Loaded pre-computed ICA mask from {args.ica_mask_path}")
+
+                # Filter mask_dict to only include target layers if specified
+                if target_layers is not None:
+                    filtered_mask_dict = {
+                        str(layer): mask_dict[str(layer)]
+                        for layer in target_layers
+                        if str(layer) in mask_dict
+                    }
+                    logger.info(
+                        f"Filtered pre-computed mask to {len(filtered_mask_dict)} layers"
+                    )
+                    mask_dict = filtered_mask_dict
             else:
                 # use *training* split to estimate ICA masks quickly
                 sample_for_ica = torch.utils.data.Subset(
@@ -1816,6 +1995,7 @@ def main():
                     num_components=args.ica_components,
                     percentile=args.ica_percentile,
                     sample_batches=50,
+                    target_layers=target_layers,
                 )
 
                 # Save the computed mask to disk for future use and memory conservation

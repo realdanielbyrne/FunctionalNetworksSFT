@@ -400,7 +400,7 @@ description = "k-bit optimizers and matrix multiplication routines."
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"all-cuda\""
+markers = "extra == \"all-cuda\""
 files = [
     {file = "bitsandbytes-0.46.1-py3-none-manylinux_2_24_aarch64.whl", hash = "sha256:21b349f776d04c6c1380405961081de29c84f49640b79d3d199b6d719818da84"},
     {file = "bitsandbytes-0.46.1-py3-none-manylinux_2_24_x86_64.whl", hash = "sha256:b0ee4a204fb926d4eae02bc2f5468ae3c11c011cfa849a4c771d4c6b201f57ae"},
@@ -991,7 +991,7 @@ description = "A new flavour of deep learning operations"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"all-cuda\""
+markers = "extra == \"all-cuda\""
 files = [
     {file = "einops-0.8.1-py3-none-any.whl", hash = "sha256:919387eb55330f5757c6bea9165c5ff5cfe63a642682ea788a6d472576d81737"},
     {file = "einops-0.8.1.tar.gz", hash = "sha256:de5d960a7a761225532e0f1959e5315ebeafc0cd43394732f103ca44b9837e84"},
@@ -1089,7 +1089,7 @@ description = "Flash Attention: Fast and Memory-Efficient Exact Attention"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"cuda\" or extra == \"all-cuda\""
+markers = "extra == \"all-cuda\""
 files = [
     {file = "flash_attn-2.8.0.post2.tar.gz", hash = "sha256:b51d7015eb78f7ab2c332ec7c36681d7e97834f010b52eb4db1f118351982f58"},
 ]
@@ -3600,7 +3600,7 @@ description = "Python Imaging Library (Fork)"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"apple-silicon\" or extra == \"all-cuda\" or extra == \"all-apple\" or extra == \"all-cpu\" or extra == \"dev\""
+markers = "extra == \"dev\" or extra == \"all-cuda\" or extra == \"all-apple\" or extra == \"all-cpu\""
 files = [
     {file = "pillow-11.3.0-cp310-cp310-macosx_10_10_x86_64.whl", hash = "sha256:1b9c17fd4ace828b3003dfd1e30bff24863e0eb59b535e8f80194d9cc7ecf860"},
     {file = "pillow-11.3.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:65dc69160114cdd0ca0f35cb434633c75e8e7fad4cf855177a05bf38678f73ad"},
@@ -5487,7 +5487,7 @@ description = "An audio package for PyTorch"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"apple-silicon\" or extra == \"all-cuda\" or extra == \"all-apple\" or extra == \"all-cpu\""
+markers = "extra == \"all-cuda\" or extra == \"all-apple\" or extra == \"all-cpu\""
 files = [
     {file = "torchaudio-2.7.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:4739af57d0eb94347d1c6a1b5668be78a7383afe826dde18a04883b9f9f263b1"},
     {file = "torchaudio-2.7.1-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:c089dbfc14c5f47091b7bf3f6bf2bbac93b86619299d04d9c102f4ad53758990"},
@@ -5525,7 +5525,7 @@ description = "image and video datasets and models for torch deep learning"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"cpu\" or extra == \"cuda\" or extra == \"apple-silicon\" or extra == \"all-cuda\" or extra == \"all-apple\" or extra == \"all-cpu\""
+markers = "extra == \"all-cuda\" or extra == \"all-apple\" or extra == \"all-cpu\""
 files = [
     {file = "torchvision-0.22.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:3b47d8369ee568c067795c0da0b4078f39a9dfea6f3bc1f3ac87530dfda1dd56"},
     {file = "torchvision-0.22.1-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:990de4d657a41ed71680cd8be2e98ebcab55371f30993dc9bd2e676441f7180e"},
@@ -6345,12 +6345,9 @@ cffi = ["cffi (>=1.11)"]
 all-apple = ["ipywidgets", "jupyter", "matplotlib", "seaborn", "torch", "torchaudio", "torchvision"]
 all-cpu = ["ipywidgets", "jupyter", "matplotlib", "seaborn", "torch", "torchaudio", "torchvision"]
 all-cuda = ["bitsandbytes", "flash-attn", "ipywidgets", "jupyter", "matplotlib", "seaborn", "torch", "torchaudio", "torchvision"]
-apple-silicon = ["torch", "torchaudio", "torchvision"]
-cpu = ["torch", "torchaudio", "torchvision"]
-cuda = ["bitsandbytes", "flash-attn", "torch", "torchaudio", "torchvision"]
 dev = ["ipywidgets", "jupyter", "matplotlib", "seaborn"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "656d5d35f1f88ec6cb1babaf50aff5a0f8a8f6e1d5f55c6e3b8a67de4d02b1bb"
+content-hash = "a2aabc1f5b3f49dc81df413b97cd0de65b4b57b7ff243ed9cbdda2291ca644da"

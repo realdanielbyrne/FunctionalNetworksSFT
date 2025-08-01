@@ -243,3 +243,56 @@ After running experiments:
    - Additional training epochs
    - Alternative masking strategies
    - Larger datasets or different domains
+
+### Platform-Specific Installation
+
+#### 🪟 Windows with CUDA Support
+
+For optimal performance on Windows with NVIDIA GPUs:
+
+```bash
+git clone <repository-url>
+cd FunctionalNetworksSFT
+
+# Create and activate virtual environment
+python -m venv venv
+venv\Scripts\activate
+
+# Install PyTorch with CUDA support first
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Install LMPipeline with quantization support
+pip install -e .[quantization]
+
+# Verify CUDA installation
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+```
+
+**CUDA Requirements:**
+
+- NVIDIA GPU with CUDA Compute Capability 5.0+
+- CUDA 11.8 or 12.1+ installed
+- Latest NVIDIA drivers
+
+**Note for RTX 40/50-series (RTX 4090, RTX 5090):** These GPUs work with current PyTorch but may show compatibility warnings:
+
+```bash
+# RTX 5090 users may see warnings about sm_120 compute capability
+# The device is still detected and usable despite the warning
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+**RTX 5090 Compatibility:** The RTX 5090 with sm_120 compute capability shows a compatibility warning with PyTorch 2.5.1, but the device is fully functional for training and inference.
+
+### Alternative: Using Poetry
+
+```bash
+# If you prefer Poetry for dependency management
+poetry install
+
+# For CUDA support, install PyTorch separately first
+poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Activate environment
+poetry shell
+```

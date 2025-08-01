@@ -31,9 +31,29 @@ def get_optimal_device() -> Tuple[torch.device, str]:
         Tuple of (device, device_name) where device_name is human-readable
     """
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = torch.device("cuda:0")  # Specify index for consistency
         device_name = f"CUDA ({torch.cuda.get_device_name()})"
+
+        # Log additional CUDA information
+        cuda_version = torch.version.cuda
+        device_count = torch.cuda.device_count()
+        memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+
         logger.info(f"Using CUDA device: {device_name}")
+        logger.info(f"CUDA version: {cuda_version}, Device count: {device_count}")
+        logger.info(f"GPU memory: {memory_gb:.1f} GB")
+
+        # Test basic CUDA operations to ensure compatibility
+        try:
+            test_tensor = torch.randn(10, 10, device=device)
+            _ = torch.matmul(test_tensor, test_tensor)
+            logger.info("CUDA operations verified successfully")
+        except Exception as e:
+            logger.warning(f"CUDA operation test failed: {e}")
+            logger.warning("Falling back to CPU")
+            device = torch.device("cpu")
+            device_name = f"CPU ({platform.processor()})"
+
         return device, device_name
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = torch.device("mps")

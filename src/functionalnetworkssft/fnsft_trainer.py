@@ -851,7 +851,27 @@ def load_model_and_tokenizer(
             tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
 
     # Load model with cross-platform device mapping
-    device_map = "auto" if device.type in ["cuda", "mps"] else None
+    # Handle CUDA compatibility issues with newer GPUs
+    device_map = None
+    if device.type in ["cuda", "mps"]:
+        try:
+            # Test if CUDA operations work with this GPU
+            test_tensor = torch.randn(10, 10).to(device)
+            _ = torch.matmul(test_tensor, test_tensor)
+            device_map = "auto"
+            logger.info("CUDA operations verified - using automatic device mapping")
+        except RuntimeError as e:
+            if "no kernel image is available" in str(e):
+                logger.warning(
+                    "CUDA kernel compatibility issue detected - using manual device placement"
+                )
+                logger.warning(
+                    "This may occur with newer GPUs. Training will continue but may be slower."
+                )
+            else:
+                logger.warning(
+                    f"CUDA test failed: {e} - falling back to manual device placement"
+                )
 
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
@@ -864,7 +884,17 @@ def load_model_and_tokenizer(
 
     # Move to device if device_map wasn't used
     if device_map is None:
-        model = model.to(device)
+        try:
+            model = model.to(device)
+            logger.info(f"Model moved to {device}")
+        except RuntimeError as e:
+            if device.type == "cuda":
+                logger.warning(f"Failed to move model to CUDA: {e}")
+                logger.warning("Falling back to CPU")
+                device = torch.device("cpu")
+                model = model.to(device)
+            else:
+                raise
 
     return model, tokenizer
 

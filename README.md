@@ -32,22 +32,176 @@ The framework implements **functional network masking** - a technique that appli
 
 ### Installation
 
-1. **Clone the repository:**
+#### Prerequisites
 
-   ```bash
-   git clone <repository-url>
-   cd FunctionalNetworksSFT
-   ```
+- **Python 3.12+**
+- **Poetry** for dependency management
+- **Git** for cloning the repository
 
-2. **Install dependencies:**
+#### 1. Clone the Repository
 
-   ```bash
-   poetry install
-   ```
+```bash
+git clone <repository-url>
+cd FunctionalNetworksSFT
+```
 
-3. **Platform-specific setup:**
+#### 2. Hardware-Specific Installation
 
-   For detailed platform-specific installation instructions, see [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md).
+Choose the installation method that matches your hardware configuration:
+
+##### 🚀 CUDA-Enabled Systems (NVIDIA GPUs)
+
+**Recommended for:** Windows/Linux systems with NVIDIA GPUs
+
+```bash
+# Step 1: Clone and navigate to the repository
+git clone <repository-url>
+cd FunctionalNetworksSFT
+
+# Step 2: Install base dependencies (Poetry creates virtual environment automatically)
+poetry install
+
+# Step 3: Run automated CUDA setup (recommended)
+poetry run python scripts/setup_cuda.py
+```
+
+**Alternative manual installation:**
+
+```bash
+# Steps 1-2 same as above, then:
+poetry install --extras cuda
+```
+
+> **Important:** Always use `poetry run` or `poetry shell` to ensure commands run within Poetry's virtual environment. Never run `python scripts/setup_cuda.py` directly as this would install packages globally.
+
+**Features enabled:**
+
+- ✅ GPU acceleration with CUDA
+- ✅ 4-bit/8-bit quantization with BitsAndBytes
+- ✅ Flash Attention (when compatible)
+- ✅ Automatic mixed precision training
+
+**Verify installation:**
+
+```bash
+poetry run python tests/test_cuda_configuration.py
+```
+
+##### 🍎 Apple Silicon (M1/M2/M3/M4 Macs)
+
+**Recommended for:** macOS systems with Apple Silicon processors
+
+```bash
+# Clone and navigate to the repository
+git clone <repository-url>
+cd FunctionalNetworksSFT
+
+# Poetry automatically creates and manages the virtual environment
+# Install with Apple Silicon optimizations
+poetry install --extras apple-silicon
+```
+
+**Features enabled:**
+
+- ✅ GPU acceleration with Metal Performance Shaders (MPS)
+- ✅ Optimized for Apple Silicon architecture
+- ✅ Native ARM64 performance
+- ❌ Quantization not available (BitsAndBytes incompatible)
+
+**Verify installation:**
+
+```bash
+python -c "import torch; print('MPS available:', torch.backends.mps.is_available())"
+```
+
+##### 💻 CPU-Only Systems
+
+**Recommended for:** Any system without GPU acceleration or as a fallback
+
+```bash
+# Clone and navigate to the repository
+git clone <repository-url>
+cd FunctionalNetworksSFT
+
+# Poetry automatically creates and manages the virtual environment
+# Install CPU-only version
+poetry install --extras cpu
+```
+
+**Features enabled:**
+
+- ✅ CPU-based training (slower but universal)
+- ✅ Full precision training (fp32)
+- ✅ Compatible with any hardware
+- ❌ No GPU acceleration
+- ❌ No quantization support
+
+#### 3. Verify Your Installation
+
+After installation, verify everything is working correctly:
+
+```bash
+# Check platform detection and recommendations
+poetry run python src/functionalnetworkssft/utils/platform_setup.py
+
+# Run comprehensive tests (CUDA systems only)
+poetry run python tests/test_cuda_configuration.py
+
+# Quick verification
+poetry run python -c "
+import torch
+from functionalnetworkssft.utils.model_utils import get_optimal_device
+device, name = get_optimal_device()
+print(f'Using device: {name}')
+print(f'PyTorch version: {torch.__version__}')
+"
+```
+
+#### 4. Troubleshooting Installation Issues
+
+**CUDA Issues:**
+
+```bash
+# Check NVIDIA GPU detection
+nvidia-smi
+
+# Reinstall with CUDA support
+poetry run python scripts/setup_cuda.py
+
+# Manual PyTorch CUDA installation
+poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+**Apple Silicon Issues:**
+
+```bash
+# Verify MPS availability
+python -c "import torch; print('MPS:', torch.backends.mps.is_available())"
+
+# Reinstall if needed
+poetry install --extras apple-silicon --force
+```
+
+**General Issues:**
+
+```bash
+# Clean installation
+poetry env remove python
+poetry install --extras <your-platform>
+
+# Check Poetry environment
+poetry env info
+```
+
+#### Platform Comparison
+
+| Platform | Installation Command | GPU Acceleration | Quantization | Recommended Use |
+|----------|---------------------|------------------|--------------|-----------------|
+| **NVIDIA GPU** | `python scripts/setup_cuda.py` | ✅ CUDA | ✅ BitsAndBytes | Production training, large models |
+| **Apple Silicon** | `poetry install --extras apple-silicon` | ✅ MPS | ❌ Not available | Development, medium models |
+| **CPU Only** | `poetry install --extras cpu` | ❌ CPU only | ❌ Not available | Testing, small models |
+
+For detailed platform-specific instructions and troubleshooting, see [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md).
 
 ### Authentication Setup
 
@@ -251,11 +405,49 @@ This command will:
 
 ## Platform Support
 
-| Platform | GPU Acceleration | Quantization | Status |
-|----------|------------------|--------------|--------|
-| CUDA (NVIDIA) | ✅ CUDA | ✅ BitsAndBytes | Fully Supported |
-| Apple Silicon | ✅ MPS | ❌ Not Available | Supported |
-| CPU Only | ❌ CPU Only | ❌ Not Available | Basic Support |
+The package provides optimized installations for different hardware configurations:
+
+### 🚀 NVIDIA GPU Systems (CUDA)
+
+**Installation:** `python scripts/setup_cuda.py`
+
+| Feature | Support | Notes |
+|---------|---------|-------|
+| GPU Acceleration | ✅ CUDA | Full NVIDIA GPU support |
+| Mixed Precision | ✅ fp16/bf16 | Automatic precision selection |
+| Quantization | ✅ 4-bit/8-bit | BitsAndBytes integration |
+| Flash Attention | ✅ When compatible | Faster attention computation |
+| Memory Optimization | ✅ Gradient checkpointing | Reduced memory usage |
+
+**Recommended for:** Production training, large models (7B+ parameters)
+
+### 🍎 Apple Silicon (MPS)
+
+**Installation:** `poetry install --extras apple-silicon`
+
+| Feature | Support | Notes |
+|---------|---------|-------|
+| GPU Acceleration | ✅ MPS | Metal Performance Shaders |
+| Mixed Precision | ✅ fp16 | Optimized for Apple Silicon |
+| Quantization | ❌ Not available | BitsAndBytes incompatible |
+| Flash Attention | ❌ Not available | MPS limitations |
+| Memory Optimization | ✅ Gradient checkpointing | Available |
+
+**Recommended for:** Development, medium models (1B-7B parameters)
+
+### 💻 CPU-Only Systems
+
+**Installation:** `poetry install --extras cpu`
+
+| Feature | Support | Notes |
+|---------|---------|-------|
+| GPU Acceleration | ❌ CPU only | No hardware acceleration |
+| Mixed Precision | ❌ fp32 only | Full precision training |
+| Quantization | ❌ Not available | CPU limitations |
+| Flash Attention | ❌ Not available | CPU limitations |
+| Memory Optimization | ✅ Gradient checkpointing | Available |
+
+**Recommended for:** Testing, small models (<1B parameters), development without GPU
 
 ## Documentation
 

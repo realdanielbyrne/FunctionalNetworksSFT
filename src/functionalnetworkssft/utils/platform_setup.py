@@ -98,6 +98,35 @@ def get_recommended_torch_index_url() -> Optional[str]:
         return None
 
 
+def get_recommended_installation_command() -> str:
+    """
+    Get the recommended installation command based on platform and CUDA availability.
+
+    Returns:
+        Poetry install command string
+    """
+    platform_info = get_platform_info()
+
+    if platform_info["is_apple_silicon"]:
+        return "poetry install --extras apple-silicon"
+    elif check_cuda_availability():
+        return "poetry install --extras cuda"
+    else:
+        # Check if CUDA drivers are available but PyTorch doesn't detect them
+        try:
+            result = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
+            if result.returncode == 0:
+                logger.info("NVIDIA GPU detected but PyTorch CUDA not available")
+                logger.info(
+                    "This likely means PyTorch was installed without CUDA support"
+                )
+                return "poetry install --extras cuda"
+        except FileNotFoundError:
+            pass
+
+        return "poetry install --extras cpu"
+
+
 def install_platform_dependencies() -> bool:
     """
     Install platform-specific dependencies using Poetry.
@@ -109,33 +138,28 @@ def install_platform_dependencies() -> bool:
     logger.info(f"Installing dependencies for platform: {platform_info}")
 
     try:
-        # Install base dependencies (already done if this script is running)
-        logger.info("Base dependencies should already be installed")
+        # Get recommended installation command
+        install_cmd = get_recommended_installation_command()
+        logger.info(f"Recommended installation: {install_cmd}")
 
-        # Install platform-specific optional dependencies
-        if platform_info["is_apple_silicon"]:
-            logger.info("Installing Apple Silicon optimizations...")
-            try:
-                subprocess.run(
-                    ["poetry", "install", "--extras", "apple-silicon"], check=True
-                )
-            except subprocess.CalledProcessError:
-                logger.warning("Failed to install Apple Silicon extras - continuing")
+        # Parse the command to get the extras
+        if "--extras" in install_cmd:
+            extras = install_cmd.split("--extras")[1].strip()
+            cmd = ["poetry", "install", "--extras", extras]
         else:
-            # Try to install CUDA dependencies
-            logger.info("Attempting to install CUDA dependencies...")
-            try:
-                subprocess.run(["poetry", "install", "--extras", "cuda"], check=True)
-                logger.info("CUDA dependencies installed successfully")
-            except subprocess.CalledProcessError:
-                logger.warning(
-                    "Failed to install CUDA dependencies - continuing without quantization"
-                )
+            cmd = ["poetry", "install"]
+
+        logger.info(f"Running: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+        logger.info("Dependencies installed successfully")
 
         return True
 
-    except Exception as e:
+    except subprocess.CalledProcessError as e:
         logger.error(f"Failed to install dependencies: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error during installation: {e}")
         return False
 
 
@@ -235,6 +259,16 @@ def print_platform_summary():
     else:
         print("⚠ CPU-only mode (no GPU acceleration)")
 
+        # Check if NVIDIA GPU is available but PyTorch doesn't detect CUDA
+        try:
+            result = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
+            if result.returncode == 0:
+                print("⚠ NVIDIA GPU detected but PyTorch CUDA not available")
+                print("  This suggests PyTorch was installed without CUDA support")
+                print("  Recommended: Reinstall with CUDA support")
+        except FileNotFoundError:
+            pass
+
     print("\nLibrary Status:")
     for lib, available in verification.items():
         if lib.endswith("_available") and not lib.startswith(("cuda", "mps")):
@@ -247,6 +281,19 @@ def print_platform_summary():
         print("✓ BitsAndBytes quantization available")
     else:
         print("⚠ Quantization not available (requires CUDA)")
+
+    # Provide installation recommendations
+    print("\nInstallation Recommendations:")
+    recommended_cmd = get_recommended_installation_command()
+    print(f"Recommended: {recommended_cmd}")
+
+    if not verification["cuda_available"] and not verification["mps_available"]:
+        print("\nTo enable GPU acceleration:")
+        if platform_info["is_apple_silicon"]:
+            print("  poetry install --extras apple-silicon")
+        else:
+            print("  poetry install --extras cuda")
+            print("  (Requires NVIDIA GPU and drivers)")
 
     print("=" * 60)
 

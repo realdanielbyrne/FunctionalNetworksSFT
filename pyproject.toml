@@ -9,9 +9,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # Core ML frameworks with cross-platform support
-    "torch>=2.4.0,<2.8.0",  # PyTorch with MPS support for Apple Silicon
-    "torchvision>=0.19.0",  # Vision utilities
-    "torchaudio>=2.4.0",    # Audio utilities
+    # Note: PyTorch installation is handled by optional dependencies for platform-specific versions
 
     # Hugging Face ecosystem
     "transformers>=4.40.0,<5.0.0",  # Core transformers library
@@ -49,16 +47,29 @@ fnsft = "functionalnetworkssft.fnsft_trainer:main"
 check-hf-token = "functionalnetworkssft.check_hf_token:main"
 
 [project.optional-dependencies]
-# CUDA-specific dependencies (NVIDIA GPUs)
-cuda = [
-    "bitsandbytes>=0.43.0",         # Quantization library (CUDA only)
-    "flash-attn>=2.5.0",            # Flash attention (CUDA only)
+# CPU-only PyTorch (fallback for any platform)
+cpu = [
+    "torch>=2.4.0,<2.8.0",         # PyTorch CPU-only version
+    "torchvision>=0.19.0",         # Vision utilities
+    "torchaudio>=2.4.0",           # Audio utilities
 ]
 
-# Apple Silicon optimizations
+# CUDA-enabled PyTorch for NVIDIA GPUs (Windows/Linux)
+# Note: These use Poetry's URL dependency syntax to install from PyTorch's CUDA index
+cuda = [
+    "torch>=2.4.0,<2.8.0",         # PyTorch with CUDA support
+    "torchvision>=0.19.0",         # Vision utilities with CUDA
+    "torchaudio>=2.4.0",           # Audio utilities with CUDA
+    "bitsandbytes>=0.43.0",        # Quantization library (CUDA only)
+    "flash-attn>=2.5.0",           # Flash attention (CUDA only)
+]
+
+# Apple Silicon optimizations (includes MPS support)
 apple-silicon = [
-    # Currently no Apple Silicon specific packages needed
-    # MPS support is built into PyTorch 2.4+
+    "torch>=2.4.0,<2.8.0",         # PyTorch with MPS support for Apple Silicon
+    "torchvision>=0.19.0",         # Vision utilities
+    "torchaudio>=2.4.0",           # Audio utilities
+    # Note: bitsandbytes and flash-attn are not compatible with Apple Silicon
 ]
 
 # Development dependencies
@@ -69,11 +80,41 @@ dev = [
     "seaborn>=0.12.0",             # Statistical plotting
 ]
 
-# All optional dependencies (manually list to avoid circular dependency)
-all = [
-    # CUDA dependencies
+# All optional dependencies for CUDA systems
+all-cuda = [
+    # PyTorch with CUDA (install from pytorch-cuda source)
+    "torch>=2.4.0,<2.8.0",
+    "torchvision>=0.19.0",
+    "torchaudio>=2.4.0",
+    # CUDA-specific optimizations
     "bitsandbytes>=0.43.0",
     "flash-attn>=2.5.0",
+    # Dev dependencies
+    "jupyter>=1.0.0",
+    "ipywidgets>=8.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+]
+
+# All optional dependencies for Apple Silicon
+all-apple = [
+    # PyTorch with MPS
+    "torch>=2.4.0,<2.8.0",
+    "torchvision>=0.19.0",
+    "torchaudio>=2.4.0",
+    # Dev dependencies
+    "jupyter>=1.0.0",
+    "ipywidgets>=8.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+]
+
+# All optional dependencies for CPU-only systems
+all-cpu = [
+    # PyTorch CPU-only
+    "torch>=2.4.0,<2.8.0",
+    "torchvision>=0.19.0",
+    "torchaudio>=2.4.0",
     # Dev dependencies
     "jupyter>=1.0.0",
     "ipywidgets>=8.0.0",
@@ -84,6 +125,8 @@ all = [
 [tool.poetry]
 packages = [{include = "functionalnetworkssft", from = "src"}]
 
+# Note: CUDA PyTorch installation is handled by scripts/setup_cuda.py
+# which uses the appropriate PyTorch CUDA index for the platform
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -17,6 +17,7 @@ The script will:
 import os
 import sys
 import logging
+import yaml
 
 from functionalnetworkssft.fnsft_trainer import main as fnsft_main
 
@@ -41,31 +42,35 @@ def run_experiment_b():
     """
     Run Experiment B: PEFT + ICA masking fine-tuning
     """
+    # Set up the configuration file path
+    config_path = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml"
+
+    # Load config to get actual values
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
     logger.info("=" * 80)
     logger.info("EXPERIMENT B: PEFT + ICA MASKING FINE-TUNING")
     logger.info("=" * 80)
-    logger.info("Model: meta-llama/Llama-3.2-1B-Instruct")
-    logger.info("Dataset: datasets/sarcasm.csv")
+    logger.info(
+        f"Model: {config.get('model_name_or_path', 'meta-llama/Llama-3.2-1B-Instruct')}"
+    )
+    logger.info(
+        f"Dataset: {config.get('dataset_name_or_path', 'Amod/mental_health_counseling_conversations')}"
+    )
     logger.info("Method: PEFT (LoRA) + ICA masking")
-    logger.info("Epochs: 2")
-    logger.info("ICA Masking: ENABLED (key mode)")
-    logger.info("ICA Components: 20")
-    logger.info("ICA Percentile: 98.0")
+    logger.info(f"Epochs: {config.get('num_train_epochs', 2)}")
+    logger.info(f"ICA Masking: ENABLED ({config.get('mask_mode', 'key')} mode)")
+    logger.info(f"ICA Components: {config.get('ica_components', 20)}")
+    logger.info(f"ICA Percentile: {config.get('ica_percentile', 98.0)}")
     logger.info("=" * 80)
-
-    # Set up the configuration file path
-    config_path = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml"
 
     # Verify configuration file exists
     if not os.path.exists(config_path):
         logger.error(f"Configuration file not found: {config_path}")
         return False
 
-    # Verify dataset exists
-    dataset_path = "datasets/sarcasm.csv"
-    if not os.path.exists(dataset_path):
-        logger.error(f"Dataset file not found: {dataset_path}")
-        return False
+    # Note: Using HuggingFace dataset, no local file validation needed
 
     # Set output directory
     output_dir = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output"
@@ -97,16 +102,16 @@ def run_experiment_b():
 if __name__ == "__main__":
     success = run_experiment_b()
     if success:
-        print("\n✅ Experiment B completed successfully!")
+        print("\nExperiment B completed successfully!")
         print(
-            "📁 Check experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/ for results"
+            "Check experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/ for results"
         )
-        print("\n💡 To run evaluation comparing both models, use:")
+        print("\nTo run evaluation comparing both models, use:")
         print("   python experiments/peft_vs_peft-ica/evaluate_models.py")
         print("   (Note: Both experiments A and B must be completed first)")
     else:
-        print("\n❌ Experiment B failed!")
+        print("\nExperiment B failed!")
         print(
-            "📋 Check experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/experiment_b.log for details"
+            "Check experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/experiment_b.log for details"
         )
         sys.exit(1)

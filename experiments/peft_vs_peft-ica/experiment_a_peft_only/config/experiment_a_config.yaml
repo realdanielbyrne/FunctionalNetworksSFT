@@ -13,12 +13,15 @@
 # =============================================================================
 
 # Model configuration
-#model_name_or_path: "microsoft/DialoGPT-small" 
-model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
+model_name_or_path: "microsoft/DialoGPT-small"
+#model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
+#model_name_or_path: "unsloth/Llama-3.2-1B-bnb-4bit"
+
 torch_dtype: "auto"  # Use platform-optimized dtype
 
 # Dataset configuration
-dataset_name_or_path: "datasets/sarcasm.csv"
+dataset_name_or_path: "Amod/mental_health_counseling_conversations"
+#dataset_name_or_path: "datasets/sarcasm.csv"
 validation_split: 0.1  # 10% for validation
 
 # Output configuration
@@ -65,8 +68,8 @@ wandb_project: "experiment-a-peft-only"
 
 # Hub upload (adapters only)
 push_to_hub: false
-hub_repo_id: "experiment-a-peft-sarcasm"
-hub_commit_message: "Experiment A: PEFT-only sarcasm fine-tuning"
+hub_repo_id: "experiment-a-peft-sarcasm-mentalhealth"
+hub_commit_message: "Experiment A: PEFT-only mentalhealth fine-tuning"
 hub_private: false
 push_adapter_only: true  # Only upload adapters for PEFT
 

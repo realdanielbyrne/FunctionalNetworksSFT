@@ -23,6 +23,8 @@ Author: Daniel Byrne
 License: MIT
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -211,7 +213,7 @@ from .utils.model_utils import (
 
 
 def apply_ica_masks(
-    model: PreTrainedModel, mask_dict: dict[str, list[int]], mask_mode: str = "key"
+    model: PreTrainedModel, mask_dict: Dict[str, List[int]], mask_mode: str = "key"
 ):
     """
     Inject forward pre-hooks that multiply the *input* of each MLP
@@ -227,13 +229,22 @@ def apply_ica_masks(
     )
 
     # Locate decoder blocks (works for GPT-like and Llama-like layouts)
-    if hasattr(model, "transformer"):
-        blocks = getattr(model.transformer, "h", None) or getattr(
-            model.transformer, "blocks", None
+    # Handle PEFT models by accessing the base model
+    actual_model: Any = model
+    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+        # PEFT model: access the underlying model
+        actual_model = model.base_model.model
+    elif hasattr(model, "base_model"):
+        # PEFT model with different structure
+        actual_model = model.base_model
+
+    if hasattr(actual_model, "transformer"):
+        blocks = getattr(actual_model.transformer, "h", None) or getattr(
+            actual_model.transformer, "blocks", None
         )
-    elif hasattr(model, "model"):
-        blocks = getattr(model.model, "layers", None) or getattr(
-            model.model, "decoder", None
+    elif hasattr(actual_model, "model"):
+        blocks = getattr(actual_model.model, "layers", None) or getattr(
+            actual_model.model, "decoder", None
         )
     else:
         blocks = None
@@ -244,30 +255,70 @@ def apply_ica_masks(
     for layer_idx, block in enumerate(blocks):
         for name, module in block.named_modules():
             # pick the *second* Linear in the MLP (in_features > hidden_size)
+            # For PEFT models, we need to apply hooks to the base layer, not the PEFT wrapper
+            target_module = module
+
             # Identify linear or equivalent modules by type and shape
             if isinstance(module, torch.nn.Linear):
                 in_features, out_features = module.in_features, module.out_features
             elif (
                 module.__class__.__name__ == "Linear8bitLt"
-            ):  # bitsandbytes quantized linear
+            ):  # bitsandbytes 8-bit quantized linear
                 in_features, out_features = module.in_features, module.out_features
+            elif module.__class__.__name__ == "Linear4bit":  # bitsandbytes 4-bit
+                in_features, out_features = module.in_features, module.out_features
+            elif hasattr(module, "base_layer"):
+                # PEFT wrapped layer (e.g., LoRA) - use the base layer for hooks
+                base_layer = module.base_layer
+                target_module = base_layer  # Apply hook to base layer, not PEFT wrapper
+                if hasattr(base_layer, "in_features"):
+                    # Standard Linear layer
+                    in_features, out_features = (
+                        base_layer.in_features,
+                        base_layer.out_features,
+                    )
+                elif hasattr(base_layer, "nf") and hasattr(base_layer, "nx"):
+                    # Conv1D layer (used in GPT models) - nf is out_features, nx is in_features
+                    in_features, out_features = base_layer.nx, base_layer.nf
+                else:
+                    continue
+            elif hasattr(module, "nf") and hasattr(module, "nx"):
+                # Direct Conv1D layer
+                in_features, out_features = module.nx, module.nf
             else:
                 continue
             if out_features == hidden_size and in_features > out_features:
                 neuron_ids = mask_dict.get(str(layer_idx), [])
-                if mask_mode == "key":  # zero the key neurons
-                    mask = torch.ones(module.in_features)
-                    mask[neuron_ids] = 0.0
-                else:  # zero everything *except* key neurons
-                    mask = torch.zeros(module.in_features)
-                    mask[neuron_ids] = 1.0
-                mask = mask.float()
+
+                # Create mask completely outside gradient computation
+                with torch.no_grad():
+                    if mask_mode == "key":  # zero the key neurons
+                        mask = torch.ones(in_features, dtype=torch.float32)
+                        mask[neuron_ids] = 0.0
+                    else:  # zero everything *except* key neurons
+                        mask = torch.zeros(in_features, dtype=torch.float32)
+                        mask[neuron_ids] = 1.0
+                    # Ensure mask requires no gradients
+                    mask.requires_grad_(False)
 
                 def pre_hook(mod, inp, mask_tensor=mask):
-                    x = inp[0]
-                    return (x * mask_tensor.to(x.device, x.dtype),) + inp[1:]
+                    # Handle both tuple and single tensor inputs
+                    if isinstance(inp, tuple):
+                        x = inp[0]
+                        # Create mask on correct device and ensure it doesn't require gradients
+                        mask_device = mask_tensor.to(device=x.device, dtype=x.dtype)
+                        mask_device.requires_grad_(False)
+                        # Apply mask by element-wise multiplication, preserving gradient flow for unmasked elements
+                        masked_x = x * mask_device
+                        return (masked_x,) + inp[1:]
+                    else:
+                        # Single tensor input
+                        mask_device = mask_tensor.to(device=inp.device, dtype=inp.dtype)
+                        mask_device.requires_grad_(False)
+                        return inp * mask_device
 
-                handles.append(module.register_forward_pre_hook(pre_hook))
+                # Apply hook to the target module (base layer for PEFT, original module otherwise)
+                handles.append(target_module.register_forward_pre_hook(pre_hook))
                 break  # stop after first matching linear in this block
     return handles
 
@@ -275,7 +326,7 @@ def apply_ica_masks(
 # ------------------------------------------------------------
 
 
-def parse_layer_specification(layer_spec: str, total_layers: int) -> list[int]:
+def parse_layer_specification(layer_spec: str, total_layers: int) -> List[int]:
     """
     Parse layer specification string into a list of layer indices.
 
@@ -377,7 +428,7 @@ def compute_ica_masks_for_model(
     percentile: float = 98.0,
     sample_batches: int = 100,
     clip_activations: bool = False,
-    target_layers: list[int] | None = None,
+    target_layers: Optional[List[int]] = None,
 ):
     """
     Lightweight, on-the-fly ICA (FastICA) over MLP activations.
@@ -435,7 +486,7 @@ def compute_ica_masks_for_model(
 
     # Handle PEFT models - get the actual base model for ICA computation
     # IMPORTANT: We use the base model because LoRA adapters are blank at training start
-    actual_model = model
+    actual_model: Any = model
     if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
         # PEFT model: model.base_model.model is the actual transformer
         actual_model = model.base_model.model
@@ -569,16 +620,16 @@ def compute_ica_masks_for_model(
             f"Layer {layer_idx}: NaN count: {np.sum(np.isnan(X))}, Inf count: {np.sum(np.isinf(X))}"
         )
 
-        # Remove any extreme outliers that could cause numerical issues
-        X_finite = X[
-            np.isfinite(X).all(axis=1)
-        ]  # Keep only rows with all finite values
-        if X_finite.shape[0] < X.shape[0] * 0.8:  # If we lose more than 20% of data
-            logger.warning(
-                f"Too many non-finite values in layer {layer_idx} ({X.shape[0] - X_finite.shape[0]} / {X.shape[0]}), skipping ICA."
-            )
-            continue
-        X = X_finite
+        # # Remove any extreme outliers that could cause numerical issues
+        # X_finite = X[
+        #     np.isfinite(X).all(axis=1)
+        # ]  # Keep only rows with all finite values
+        # if X_finite.shape[0] < X.shape[0] * 0.8:  # If we lose more than 20% of data
+        #     logger.warning(
+        #         f"Too many non-finite values in layer {layer_idx} ({X.shape[0] - X_finite.shape[0]} / {X.shape[0]}), skipping ICA."
+        #     )
+        #     continue
+        # X = X_finite
 
         # Check for numerical issues after cleaning
         if np.any(np.isnan(X)) or np.any(np.isinf(X)):
@@ -1043,25 +1094,25 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
     logger.info("=" * 60)
 
     if use_peft:
-        logger.info("🔧 Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
-        logger.info("📊 Benefits:")
+        logger.info("Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
+        logger.info("Benefits:")
         logger.info("   • Significantly reduced memory usage")
         logger.info("   • Faster training and inference")
         logger.info("   • Smaller model artifacts (adapters only)")
         logger.info("   • Reduced risk of catastrophic forgetting")
-        logger.info("📋 Adapter Configuration:")
+        logger.info("Adapter Configuration:")
         if hasattr(model, "peft_config") and model.peft_config:
             logger.info(f"   • PEFT adapters configured and active")
         else:
             logger.info(f"   • No PEFT configuration detected")
     else:
-        logger.info("🔧 Training Mode: Full Parameter Fine-Tuning")
-        logger.info("⚠️  Resource Requirements:")
+        logger.info("Training Mode: Full Parameter Fine-Tuning")
+        logger.info("Resource Requirements:")
         logger.info("   • High memory usage (all parameters trainable)")
         logger.info("   • Longer training time")
         logger.info("   • Large model artifacts (full model)")
         logger.info("   • Higher risk of catastrophic forgetting")
-        logger.info("💡 Recommendations:")
+        logger.info("Recommendations:")
         logger.info("   • Ensure sufficient GPU memory")
         logger.info("   • Consider gradient checkpointing")
         logger.info("   • Use lower learning rates")
@@ -1072,7 +1123,7 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
         try:
             memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
             memory_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
-            logger.info(f"🖥️  GPU Memory Usage:")
+            logger.info(f"GPU Memory Usage:")
             logger.info(f"   • Allocated: {memory_allocated:.2f} GB")
             logger.info(f"   • Reserved: {memory_reserved:.2f} GB")
         except Exception as e:
@@ -1380,9 +1431,7 @@ def upload_to_hub(
                     token=token,
                 )
 
-        logger.info(
-            f"✅ Successfully uploaded model to: https://huggingface.co/{repo_id}"
-        )
+        logger.info(f"Successfully uploaded model to: https://huggingface.co/{repo_id}")
 
     except RepositoryNotFoundError as e:
         logger.error(f"Repository not found and could not be created: {e}")
@@ -1632,6 +1681,12 @@ def main():
         default=1.0,
         help="Maximum gradient norm for gradient clipping",
     )
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        default=True,
+        help="Enable gradient checkpointing for memory efficiency",
+    )
 
     # Additional options
     parser.add_argument(
@@ -1846,10 +1901,11 @@ def main():
         run_name=f"sft-{Path(args.model_name_or_path).name}",
         remove_unused_columns=False,
         dataloader_pin_memory=False,
-        gradient_checkpointing=True,
+        gradient_checkpointing=args.gradient_checkpointing,
         fp16=args.torch_dtype == "float16",
         bf16=args.torch_dtype == "bfloat16",
         max_grad_norm=args.max_grad_norm,
+        label_names=["labels"],  # Quiet PEFT label warning
     )
 
     logger.info("Starting supervised fine-tuning...")
@@ -1925,7 +1981,7 @@ def main():
             if args.ica_mask_layers is not None:
                 # Determine total number of layers in the model
                 total_layers = 0
-                actual_model = model
+                actual_model: Any = model
                 if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
                     actual_model = model.base_model.model
                 elif hasattr(model, "base_model"):
@@ -2007,6 +2063,12 @@ def main():
                     logger.info(f"Saved ICA mask to {mask_save_path} for future use")
 
             if mask_dict:
+                # Log unique mask coverage per layer
+                logger.info("ICA Mask Coverage Summary:")
+                for lid, idxs in mask_dict.items():
+                    uniq = len(set(idxs))
+                    logger.info(f"Layer {lid}: {uniq} masked neurons")
+
                 mask_handles = apply_ica_masks(
                     model, mask_dict, mask_mode=args.mask_mode
                 )
@@ -2034,6 +2096,10 @@ def main():
         if args.resume_from_checkpoint:
             checkpoint = args.resume_from_checkpoint
             logger.info(f"Resuming training from checkpoint: {checkpoint}")
+
+        # Log trainable parameters count
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info(f"Trainable parameters: {trainable_params:,}")
 
         # Start training
         logger.info("Starting training...")

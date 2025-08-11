@@ -23,6 +23,7 @@ import logging
 import os
 import sys
 import time
+import yaml
 from datetime import datetime
 from pathlib import Path
 
@@ -144,26 +145,69 @@ def run_evaluation():
 
 def print_experiment_summary():
     """Print a summary of the experiment setup"""
+    # Load configs to get actual values
+    config_a_path = "experiments/peft_vs_peft-ica/experiment_a_peft_only/config/experiment_a_config.yaml"
+    config_b_path = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml"
+
+    config_a = {}
+    config_b = {}
+
+    # Load config A
+    try:
+        with open(config_a_path, "r") as f:
+            config_a = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        print(f"Warning: Could not load config A ({config_a_path}): {e}")
+        print("Using fallback values for Experiment A")
+
+    # Load config B
+    try:
+        with open(config_b_path, "r") as f:
+            config_b = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        print(f"Warning: Could not load config B ({config_b_path}): {e}")
+        print("Using fallback values for Experiment B")
+
     print("=" * 80)
     print("FINE-TUNING EXPERIMENT COMPARISON")
     print("=" * 80)
-    print("Model: meta-llama/Llama-3.2-1B-Instruct")
-    print("Dataset: datasets/sarcasm.csv (200 Q&A pairs)")
-    print("Training Epochs: 2")
+    print(f"Model: {config_b.get('model_name_or_path', '[CONFIG NOT LOADED]')}")
+    print(
+        f"Dataset: {config_b.get('dataset_name_or_path', '[CONFIG NOT LOADED]')} (3,512 Context-Response pairs)"
+    )
+    print(f"Training Epochs: {config_b.get('num_train_epochs', '[CONFIG NOT LOADED]')}")
     print()
     print("Experiment A: PEFT (LoRA) only")
-    print("  - LoRA rank: 16")
-    print("  - LoRA alpha: 32")
-    print("  - LoRA dropout: 0.1")
-    print("  - ICA masking: DISABLED")
+    print(f"  - LoRA rank: {config_a.get('lora_r', '[CONFIG NOT LOADED]')}")
+    print(f"  - LoRA alpha: {config_a.get('lora_alpha', '[CONFIG NOT LOADED]')}")
+    print(f"  - LoRA dropout: {config_a.get('lora_dropout', '[CONFIG NOT LOADED]')}")
+    print(
+        f"  - ICA masking: {'DISABLED' if config_a.get('mask_mode') is None else 'ENABLED'}"
+    )
     print()
     print("Experiment B: PEFT (LoRA) + ICA masking")
-    print("  - LoRA rank: 16 (identical to A)")
-    print("  - LoRA alpha: 32 (identical to A)")
-    print("  - LoRA dropout: 0.1 (identical to A)")
-    print("  - ICA masking: ENABLED (key mode)")
-    print("  - ICA components: 20")
-    print("  - ICA percentile: 98.0")
+    print(
+        f"  - LoRA rank: {config_b.get('lora_r', '[CONFIG NOT LOADED]')} (identical to A)"
+    )
+    print(
+        f"  - LoRA alpha: {config_b.get('lora_alpha', '[CONFIG NOT LOADED]')} (identical to A)"
+    )
+    print(
+        f"  - LoRA dropout: {config_b.get('lora_dropout', '[CONFIG NOT LOADED]')} (identical to A)"
+    )
+
+    mask_mode = config_b.get("mask_mode", "[CONFIG NOT LOADED]")
+    if mask_mode and mask_mode != "[CONFIG NOT LOADED]":
+        print(f"  - ICA masking: ENABLED ({mask_mode} mode)")
+    else:
+        print(f"  - ICA masking: {mask_mode}")
+
+    print(
+        f"  - ICA components: {config_b.get('ica_components', '[CONFIG NOT LOADED]')}"
+    )
+    print(
+        f"  - ICA percentile: {config_b.get('ica_percentile', '[CONFIG NOT LOADED]')}"
+    )
     print("=" * 80)
 
 
@@ -221,7 +265,7 @@ def main():
     print("=" * 80)
 
     for exp_name, success in results.items():
-        status = "✅ SUCCESS" if success else "❌ FAILED"
+        status = "SUCCESS" if success else "FAILED"
         print(f"{exp_name.replace('_', ' ').title()}: {status}")
 
     print(f"\nTotal execution time: {total_time:.2f} seconds")
@@ -236,14 +280,12 @@ def main():
 
     # Exit with appropriate code
     if all(results.values()):
-        print("\n🎉 All experiments and evaluation completed successfully!")
+        print("\nAll experiments and evaluation completed successfully!")
         if "evaluation" in results and results["evaluation"]:
-            print(
-                "📊 Check the evaluation summary for detailed performance comparison!"
-            )
+            print("Check the evaluation summary for detailed performance comparison!")
         sys.exit(0)
     else:
-        print("\n⚠️  Some experiments failed. Check logs for details.")
+        print("\nSome experiments failed. Check logs for details.")
         sys.exit(1)
 
 

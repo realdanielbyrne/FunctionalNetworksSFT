@@ -137,7 +137,7 @@ python experiments/peft_vs_peft-ica/evaluate_models.py --output-dir custom_resul
 | Parameter | Experiment A | Experiment B |
 |-----------|--------------|--------------|
 | `mask_mode` | `null` | `"key"` |
-| `ica_components` | 20 (unused) | 20 |
+| `ica_components` | 20 (unused) | 5 |
 | `ica_percentile` | 98.0 (unused) | 98.0 |
 
 ## 📊 Model Evaluation

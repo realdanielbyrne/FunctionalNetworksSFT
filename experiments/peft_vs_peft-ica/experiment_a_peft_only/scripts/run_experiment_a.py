@@ -45,7 +45,7 @@ def run_experiment_a():
     logger.info("EXPERIMENT A: PEFT-ONLY FINE-TUNING")
     logger.info("=" * 80)
     logger.info("Model: meta-llama/Llama-3.2-1B-Instruct")
-    logger.info("Dataset: datasets/sarcasm.csv")
+    logger.info("Dataset: Amod/mental_health_counseling_conversations")
     logger.info("Method: PEFT (LoRA) only")
     logger.info("Epochs: 2")
     logger.info("ICA Masking: DISABLED")
@@ -59,11 +59,7 @@ def run_experiment_a():
         logger.error(f"Configuration file not found: {config_path}")
         return False
 
-    # Verify dataset exists
-    dataset_path = "datasets/sarcasm.csv"
-    if not os.path.exists(dataset_path):
-        logger.error(f"Dataset file not found: {dataset_path}")
-        return False
+    # Note: Using HuggingFace dataset, no local file validation needed
 
     # Set output directory
     output_dir = "experiments/peft_vs_peft-ica/experiment_a_peft_only/output"

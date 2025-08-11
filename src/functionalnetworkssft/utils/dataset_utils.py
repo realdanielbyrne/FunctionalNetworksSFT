@@ -51,6 +51,11 @@ class DatasetFormatter:
             "instruction": item["question"],
             "response": item["answer"],
         },
+        # Context-response formats (common in some datasets)
+        ("context", "response"): lambda item: {
+            "instruction": item["context"],
+            "response": item["response"],
+        },
         # Context-based formats
         ("context", "question", "answer"): lambda item: {
             "instruction": f"Context: {item['context']}\n\nQuestion: {item['question']}",
@@ -104,6 +109,7 @@ class DatasetFormatter:
             ("prompt", "completion"),
             ("prompt", "response"),
             ("question", "answer"),
+            ("context", "response"),  # Context-response format
             ("context", "question", "answer"),
             ("text",),
         ]

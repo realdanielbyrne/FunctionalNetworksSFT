@@ -195,28 +195,28 @@ def run_full_training():
         logger.info("✅ Full fine-tuning completed successfully!")
         return True
     except Exception as e:
-        logger.error(f"❌ Full fine-tuning failed: {e}")
+        logger.error(f" Full fine-tuning failed: {e}")
         return False
 
 
 def compare_outputs():
     """Compare the outputs from both training modes."""
     logger.info("\n" + "=" * 60)
-    logger.info("📊 TRAINING COMPARISON SUMMARY")
+    logger.info(" TRAINING COMPARISON SUMMARY")
     logger.info("=" * 60)
 
     peft_dir = Path("./demo_output/llama_sarcasm_peft")
     full_dir = Path("./demo_output/llama_sarcasm_full")
 
     if peft_dir.exists():
-        logger.info(f"📁 PEFT Model: {peft_dir}")
+        logger.info(f" PEFT Model: {peft_dir}")
         logger.info("   - Contains LoRA adapters only")
         logger.info("   - Small file size (~few MB)")
         logger.info("   - Memory efficient training")
         logger.info("   - Requires base model + adapters for inference")
 
     if full_dir.exists():
-        logger.info(f"📁 Full Model: {full_dir}")
+        logger.info(f" Full Model: {full_dir}")
         logger.info("   - Contains complete fine-tuned model")
         logger.info("   - Large file size (~few GB)")
         logger.info("   - Higher memory training requirements")
@@ -247,11 +247,11 @@ def main():
 
     args = parser.parse_args()
 
-    logger.info("🎯 Llama-3.2-1B Sarcasm Fine-Tuning Demonstration")
+    logger.info(" Llama-3.2-1B Sarcasm Fine-Tuning Demonstration")
     logger.info("=" * 60)
-    logger.info(f"🤖 Model: meta-llama/Llama-3.2-1B-Instruct")
-    logger.info(f"📊 Dataset: datasets/sarcasm.csv (200 Q&A pairs)")
-    logger.info(f"🔧 Training Mode: {args.mode}")
+    logger.info(f" Model: meta-llama/Llama-3.2-1B-Instruct")
+    logger.info(f" Dataset: datasets/sarcasm.csv (200 Q&A pairs)")
+    logger.info(f" Training Mode: {args.mode}")
     logger.info("=" * 60)
 
     success = True
@@ -279,8 +279,8 @@ def main():
         logger.info("🧹 Cleaned up demo outputs")
 
     if success:
-        logger.info("\n🎉 Demonstration completed successfully!")
-        logger.info("💡 Try running inference with your fine-tuned models!")
+        logger.info("\n Demonstration completed successfully!")
+        logger.info(" Try running inference with your fine-tuned models!")
     else:
         logger.error("\n❌ Some demonstrations failed. Check logs for details.")
         sys.exit(1)

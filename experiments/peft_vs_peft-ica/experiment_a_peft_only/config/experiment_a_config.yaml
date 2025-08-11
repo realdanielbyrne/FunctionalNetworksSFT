@@ -83,6 +83,7 @@ mask_mode: null         # No masking for PEFT-only experiment
 ica_mask_path: null
 ica_components: 20      # Not used but kept for consistency
 ica_percentile: 98.0    # Not used but kept for consistency
+ica_selection_mode: "max_abs"  # Not used but kept for consistency
 
 # Authentication
 use_auth_token: true    # For gated model access

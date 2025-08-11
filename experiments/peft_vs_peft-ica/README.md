@@ -2,7 +2,7 @@
 
 This directory contains a comprehensive experimental setup comparing two fine-tuning approaches for the `meta-llama/Llama-3.2-1B-Instruct` model using the sarcasm dataset.
 
-## 🎯 Experiment Overview
+## Experiment Overview
 
 ### Objective
 
@@ -14,7 +14,7 @@ Compare the effectiveness of Parameter Efficient Fine-Tuning (PEFT) with and wit
 - **Dataset**: `datasets/sarcasm.csv` (200 question-answer pairs with sarcastic responses)
 - **Training Epochs**: 2 (for both experiments)
 
-## 🧪 Experiments
+## Experiments
 
 ### Experiment A: PEFT-Only
 
@@ -39,7 +39,7 @@ The **only** parameter difference between experiments is the ICA masking setting
 
 All other parameters (LoRA settings, training hyperparameters, etc.) are identical.
 
-## 🚀 Running Experiments
+## Running Experiments
 
 ### Prerequisites
 
@@ -90,7 +90,7 @@ python experiments/peft_vs_peft-ica/evaluate_models.py --test-size 0.3
 python experiments/peft_vs_peft-ica/evaluate_models.py --output-dir custom_results
 ```
 
-## 📊 Expected Outputs
+## Expected Outputs
 
 ### Experiment A Output (`experiment_a_peft_only/output/`)
 
@@ -119,7 +119,7 @@ python experiments/peft_vs_peft-ica/evaluate_models.py --output-dir custom_resul
 
 - `experiment_run_YYYYMMDD_HHMMSS.log` - Timestamped run logs
 
-## ⚙️ Configuration Details
+## Configuration Details
 
 ### Shared Parameters (Identical in Both Experiments)
 

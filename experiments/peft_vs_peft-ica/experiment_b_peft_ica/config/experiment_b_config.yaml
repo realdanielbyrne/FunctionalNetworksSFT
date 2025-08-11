@@ -34,7 +34,7 @@ lora_dropout: 0.1       # LoRA dropout
 lora_target_modules: null  # Auto-detect target modules
 
 # Training Configuration
-max_steps: 5 # Uncomment to override num_train_epochs
+#max_steps: 5 # Uncomment to override num_train_epochs
 num_train_epochs: 2     # Exactly 2 epochs as specified
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 1
@@ -50,8 +50,8 @@ template_format: "auto" # Auto-detect chat template
 
 # Evaluation and Logging
 logging_steps: 10
-save_steps: 100
-eval_steps: 100
+save_steps: 500
+eval_steps: 500
 save_total_limit: 2
 load_best_model_at_end: true
 metric_for_best_model: "eval_loss"
@@ -79,9 +79,10 @@ gguf_quantization: "q4_0"
 
 # ICA masking (ENABLED for Experiment B) - THE ONLY DIFFERENCE
 mask_mode: "key"        # Enable ICA masking in "key" mode
-ica_mask_path: null     # Compute mask on-the-fly
-ica_components: 5      # Number of ICA components
-ica_percentile: 98.0    # Percentile threshold for neuron selection
+ica_mask_path: null    # Compute mask on-the-fly
+ica_components: 20      # Number of ICA components
+ica_percentile: 95.0    # Percentile threshold for neuron selection
+ica_selection_mode: "max_abs"  # max_abs, l2, or topk
 
 # Authentication
 use_auth_token: true    # For gated model access

@@ -348,16 +348,16 @@ def save_model_and_tokenizer(
 
     if use_peft:
         if "adapter_config.json" in saved_files:
-            logger.info("✓ PEFT adapter configuration saved")
+            logger.info("PEFT adapter configuration saved")
         if any(f.startswith("adapter_model") for f in saved_files):
-            logger.info("✓ PEFT adapter weights saved")
+            logger.info("PEFT adapter weights saved")
     else:
         if "config.json" in saved_files:
-            logger.info("✓ Model configuration saved")
+            logger.info("Model configuration saved")
         if any(
             f.startswith("pytorch_model") or f.endswith(".safetensors")
             for f in saved_files
         ):
-            logger.info("✓ Full model weights saved")
+            logger.info("Full model weights saved")
 
     logger.info("Model and tokenizer saved successfully")

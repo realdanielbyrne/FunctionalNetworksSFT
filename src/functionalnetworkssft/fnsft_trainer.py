@@ -426,6 +426,7 @@ def compute_ica_masks_for_model(
     tokenizer: PreTrainedTokenizerBase,
     num_components: int = 20,
     percentile: float = 98.0,
+    selection_mode: Literal["max_abs", "l2", "topk"] = "max_abs",
     sample_batches: int = 100,
     clip_activations: bool = False,
     target_layers: Optional[List[int]] = None,
@@ -454,6 +455,9 @@ def compute_ica_masks_for_model(
     logger.info("Running ICA to discover functional networks – this can be slow…")
     if target_layers is not None:
         logger.info(f"ICA will be applied only to layers: {target_layers}")
+        logger.info(
+            f"num_components: {num_components}, percentile: {percentile}, selection_mode: {selection_mode}"
+        )
     else:
         logger.info("ICA will be applied to all layers (default behavior)")
     model.eval()
@@ -704,13 +708,30 @@ def compute_ica_masks_for_model(
             logger.warning(f"ICA failed on layer {layer_idx}: {str(e)}, skipping.")
             continue
 
-        # 4. pick top-|percentile| neurons across all components
+        # 4. score neurons and select based on selection_mode
         try:
-            thr = np.percentile(np.abs(mixing), percentile)
-            key_neurons = np.where(np.abs(mixing) >= thr)[0].tolist()
+            if selection_mode == "max_abs":
+                scores = np.max(np.abs(mixing), axis=1)
+                thr = np.percentile(scores, percentile)
+                key_neurons = np.flatnonzero(scores >= thr).tolist()
+            elif selection_mode == "l2":
+                scores = np.linalg.norm(mixing, ord=2, axis=1)
+                thr = np.percentile(scores, percentile)
+                key_neurons = np.flatnonzero(scores >= thr).tolist()
+            elif selection_mode == "topk":
+                scores = np.max(np.abs(mixing), axis=1)
+                k = max(1, int(round((100.0 - percentile) / 100.0 * scores.shape[0])))
+                key_neurons = np.argsort(scores)[-k:].tolist()
+            else:
+                raise ValueError(f"Unknown ICA selection_mode: {selection_mode}")
             if key_neurons:
+                # Deduplicate while preserving order
+                seen = set()
+                key_neurons = [n for n in key_neurons if not (n in seen or seen.add(n))]
                 layer_masks[str(layer_idx)] = key_neurons
-                logger.debug(f"Layer {layer_idx}: found {len(key_neurons)} key neurons")
+                logger.debug(
+                    f"Layer {layer_idx}: selection_mode={selection_mode}, selected {len(key_neurons)} neurons"
+                )
         except Exception as e:
             logger.warning(
                 f"Failed to compute percentile threshold for layer {layer_idx}: {str(e)}, skipping."
@@ -1771,7 +1792,14 @@ def main():
         "--ica_percentile",
         type=float,
         default=98.0,
-        help="A float argument defaulting to 98.0 that sets the percentile threshold (valid range 0-100) for selecting neurons within each component when ICA is executed on-the-fly.",
+        help="Percentile threshold (0-100). For selection_mode 'max_abs' and 'l2', selects neurons with scores >= this percentile. For 'topk', selects the top (100 - percentile)% of neurons by score.",
+    )
+    parser.add_argument(
+        "--ica_selection_mode",
+        type=str,
+        choices=["max_abs", "l2", "topk"],
+        default="max_abs",
+        help="How to score/select neurons from the ICA mixing matrix: 'max_abs' (default), 'l2', or 'topk'.",
     )
     parser.add_argument(
         "--ica_mask_layers",
@@ -2050,6 +2078,7 @@ def main():
                     tokenizer,
                     num_components=args.ica_components,
                     percentile=args.ica_percentile,
+                    selection_mode=args.ica_selection_mode,
                     sample_batches=50,
                     target_layers=target_layers,
                 )

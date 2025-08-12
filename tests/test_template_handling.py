@@ -196,8 +196,19 @@ class TestInstructionDatasetTemplateHandling:
         assert "input_ids" in item
         assert "attention_mask" in item
         assert "labels" in item
-        # Labels should equal input_ids when no padding token is set
-        assert torch.equal(item["input_ids"], item["labels"])
+
+        # The InstructionDataset sets pad_token_id to eos_token_id when it's None
+        # So padding tokens should be set to -100 in labels
+        padding_positions = item["input_ids"] == tokenizer.pad_token_id
+        if padding_positions.any():
+            # Where input_ids has padding tokens, labels should have -100
+            assert torch.all(item["labels"][padding_positions] == -100)
+            # Where input_ids doesn't have padding tokens, labels should match input_ids
+            non_padding_positions = ~padding_positions
+            assert torch.all(
+                item["input_ids"][non_padding_positions]
+                == item["labels"][non_padding_positions]
+            )
 
     def test_padding_token_handling(self):
         """Test that padding tokens are properly set to -100 in labels."""

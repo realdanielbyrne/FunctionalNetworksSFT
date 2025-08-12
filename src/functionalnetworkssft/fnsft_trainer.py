@@ -55,6 +55,12 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, Ta
 import wandb
 from tqdm.auto import tqdm
 
+# Import whoami at module level for testing
+try:
+    from huggingface_hub import whoami
+except ImportError:
+    whoami = None
+
 # ===================== Legacy ICA helpers (for backward compatibility) =====================
 import numpy as np
 import json
@@ -462,15 +468,16 @@ def load_model_and_tokenizer(
         else:
             # Try to use cached credentials from huggingface-cli login
             try:
-                from huggingface_hub import whoami
-
-                user_info = whoami()  # This will use cached token if available
-                logger.info(
-                    f"Using cached HuggingFace credentials for user: {user_info['name']}"
-                )
-                auth_token = (
-                    True  # Set to True to indicate we should use cached credentials
-                )
+                if whoami is not None:
+                    user_info = whoami()  # This will use cached token if available
+                    logger.info(
+                        f"Using cached HuggingFace credentials for user: {user_info['name']}"
+                    )
+                    auth_token = (
+                        True  # Set to True to indicate we should use cached credentials
+                    )
+                else:
+                    raise ImportError("whoami not available")
             except Exception as e:
                 logger.warning(
                     f"No HF_TOKEN environment variable and no cached credentials found: {e}"
@@ -1031,7 +1038,7 @@ def main(log_file=None):
     parser.add_argument(
         "--ica_n_jobs",
         type=int,
-        default=4,
+        default=2,
         help="Number of parallel jobs for ICA computation. -1 uses all available CPU cores, 1 disables parallelization.",
     )
     parser.add_argument(
@@ -1040,6 +1047,13 @@ def main(log_file=None):
         default="threading",
         choices=["threading", "loky", "multiprocessing"],
         help="Joblib backend for ICA parallelization. 'threading' is most compatible but may be slower for CPU-intensive tasks. 'loky' or 'multiprocessing' may be faster but can have compatibility issues with some libraries.",
+    )
+    parser.add_argument(
+        "--ica_dtype",
+        type=str,
+        default=None,
+        choices=[None, "auto", "float32", "float16", "bfloat16"],
+        help="Data type for ICA computation. None/float32 (default) uses float32 for maximum numerical stability. 'auto' matches model dtype but uses float32 for half-precision models. 'float16'/'bfloat16' use reduced precision for better performance but may affect stability.",
     )
 
     args = parser.parse_args()
@@ -1260,6 +1274,7 @@ def main(log_file=None):
                 sample_batches=50,
                 n_jobs=args.ica_n_jobs,
                 backend=args.ica_backend,
+                ica_dtype=args.ica_dtype,
             )
 
             # Parse layer specification if provided

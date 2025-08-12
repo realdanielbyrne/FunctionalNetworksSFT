@@ -63,16 +63,30 @@ import json
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("sft_training.log"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-logger = logging.getLogger(__name__)
+
+# Configure logging only if not already configured
+def setup_logging(log_file="sft_training.log"):
+    """Set up logging configuration if not already configured."""
+    root_logger = logging.getLogger()
+
+    # Check if logging is already configured (has handlers)
+    if root_logger.handlers:
+        # Logging already configured, just get our logger
+        return logging.getLogger(__name__)
+
+    # Configure logging for the first time
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+    return logging.getLogger(__name__)
+
+
+logger = setup_logging()
 
 
 def load_env_file():
@@ -685,8 +699,13 @@ def load_config_from_yaml(config_path: str) -> Dict[str, Any]:
     return config
 
 
-def main():
+def main(log_file=None):
     """Main training function."""
+    # Set up logging with custom log file if provided
+    global logger
+    if log_file:
+        logger = setup_logging(log_file)
+
     # Load environment variables from .env file if it exists
     load_env_file()
 

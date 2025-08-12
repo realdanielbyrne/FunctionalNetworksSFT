@@ -72,8 +72,9 @@ def run_experiment_a():
         logger.info(f"Starting training with config: {config_path}")
         logger.info("This may take several minutes...")
 
-        # Run the training
-        fnsft_main()
+        # Run the training with experiment-specific log file
+        log_file_path = "experiments/peft_vs_peft-ica/experiment_a_peft_only/output/experiment_a.log"
+        fnsft_main(log_file=log_file_path)
 
         logger.info("Experiment A completed successfully!")
         logger.info(f"Results saved to: {output_dir}")

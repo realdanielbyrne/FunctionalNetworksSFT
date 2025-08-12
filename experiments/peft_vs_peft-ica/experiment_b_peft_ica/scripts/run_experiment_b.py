@@ -84,8 +84,11 @@ def run_experiment_b():
         logger.info("This may take several minutes...")
         logger.info("Note: ICA computation will add extra time at the beginning")
 
-        # Run the training
-        fnsft_main()
+        # Run the training with experiment-specific log file
+        log_file_path = (
+            "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/experiment_b.log"
+        )
+        fnsft_main(log_file=log_file_path)
 
         logger.info("Experiment B completed successfully!")
         logger.info(f"Results saved to: {output_dir}")

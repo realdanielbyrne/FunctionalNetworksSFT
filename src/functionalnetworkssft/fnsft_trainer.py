@@ -799,10 +799,10 @@ def main(log_file=None):
 
     # Quantization arguments
     parser.add_argument(
-        "--use_4bit", action="store_true", default=True, help="Use 4-bit quantization"
+        "--use_4bit", action="store_true", help="Use 4-bit quantization"
     )
     parser.add_argument(
-        "--use_8bit", action="store_true", help="Use 8-bit quantization"
+        "--use_8bit", action="store_true", default=True, help="Use 8-bit quantization"
     )
     parser.add_argument(
         "--bnb_4bit_compute_dtype",
@@ -898,7 +898,7 @@ def main(log_file=None):
     )
     parser.add_argument("--logging_steps", type=int, default=10, help="Logging steps")
     parser.add_argument(
-        "--save_steps", type=int, default=500, help="Save checkpoint steps"
+        "--save_steps", type=int, default=100, help="Save checkpoint steps"
     )
     parser.add_argument("--eval_steps", type=int, default=500, help="Evaluation steps")
     parser.add_argument(
@@ -1038,7 +1038,7 @@ def main(log_file=None):
     parser.add_argument(
         "--ica_n_jobs",
         type=int,
-        default=2,
+        default=1,
         help="Number of parallel jobs for ICA computation. -1 uses all available CPU cores, 1 disables parallelization.",
     )
     parser.add_argument(
@@ -1152,6 +1152,28 @@ def main(log_file=None):
             name=f"sft-{Path(args.model_name_or_path).name}-{Path(args.dataset_name_or_path).name}",
         )
 
+    # Determine device for data loader and enable TF32 on CUDA
+    device_for_args, _ = get_optimal_device()
+    if device_for_args.type == "cuda":
+        try:
+            # Enable TF32 on matmul and cuDNN for speed on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            try:
+                # Prefer high precision matmul policy when available (PyTorch 2.0+)
+                torch.set_float32_matmul_precision("high")
+            except Exception:
+                pass
+            logger.info("Enabled TF32 (matmul/cudnn) for CUDA")
+        except Exception as e:
+            logger.debug(f"Could not enable TF32: {e}")
+    pin_memory_flag = device_for_args.type == "cuda"
+    logger.info(
+        f"DataLoader pin_memory: {pin_memory_flag} | TF32 matmul: "
+        f"{getattr(torch.backends.cuda.matmul, 'allow_tf32', None) if device_for_args.type == 'cuda' else 'N/A'} | "
+        f"TF32 cuDNN: {getattr(torch.backends.cudnn, 'allow_tf32', None) if device_for_args.type == 'cuda' else 'N/A'}"
+    )
+
     # Set up training arguments
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -1176,7 +1198,7 @@ def main(log_file=None):
         report_to="wandb" if args.use_wandb else None,
         run_name=f"sft-{Path(args.model_name_or_path).name}",
         remove_unused_columns=False,
-        dataloader_pin_memory=False,
+        dataloader_pin_memory=pin_memory_flag,
         gradient_checkpointing=args.gradient_checkpointing,
         fp16=args.torch_dtype == "float16",
         bf16=args.torch_dtype == "bfloat16",

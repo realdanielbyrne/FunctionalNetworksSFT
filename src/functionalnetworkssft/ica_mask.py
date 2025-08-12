@@ -45,7 +45,7 @@ class ICAMask:
         num_components: int = 20,
         percentile: float = 98.0,
         selection_mode: Literal["max_abs", "l2", "topk"] = "max_abs",
-        sample_batches: int = 100,
+        sample_batches: int = 50,
         clip_activations: bool = False,
         n_jobs: int = -1,
         backend: str = "threading",

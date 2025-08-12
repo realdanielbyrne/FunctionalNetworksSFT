@@ -236,6 +236,7 @@ class InstructionDataset(Dataset):
         instruction_template: str = "### Instruction:\n{instruction}\n\n### Response:\n{response}",
         auto_detect_format: bool = True,
         template_format: str = "auto",
+        detected_format: Optional[tuple] = None,
     ):
         self.data = data
         self.tokenizer = tokenizer
@@ -260,17 +261,14 @@ class InstructionDataset(Dataset):
         self.actual_template_format = self._determine_template_format()
         logger.info(f"Using template format: {self.actual_template_format}")
 
-        # Detect and log dataset format
-        if self.auto_detect_format and data:
+        # Use provided detected format or detect it if not provided
+        if detected_format is not None:
+            # Use the pre-detected format to avoid duplicate detection/logging
+            self.detected_format = detected_format
+        elif self.auto_detect_format and data:
+            # Only detect format if not already provided
             self.detected_format = DatasetFormatter.detect_format(data)
             logger.info(f"Detected dataset format: {self.detected_format}")
-
-            # Convert first sample to show the transformation
-            if len(data) > 0:
-                sample_converted = DatasetFormatter.convert_to_standard_format(
-                    data[0], self.detected_format
-                )
-
         else:
             self.detected_format = None
 
@@ -1033,7 +1031,7 @@ def main(log_file=None):
     parser.add_argument(
         "--ica_n_jobs",
         type=int,
-        default=6,
+        default=4,
         help="Number of parallel jobs for ICA computation. -1 uses all available CPU cores, 1 disables parallelization.",
     )
     parser.add_argument(
@@ -1216,6 +1214,12 @@ def main(log_file=None):
 
         train_data, val_data = split_dataset(data, data_args.validation_split)
 
+        # Detect dataset format once to avoid duplicate logging
+        detected_format = None
+        if data_args.auto_detect_format and data:
+            detected_format = DatasetFormatter.detect_format(data)
+            logger.info(f"Detected dataset format: {detected_format}")
+
         # Create datasets
         train_dataset = InstructionDataset(
             train_data,
@@ -1224,6 +1228,7 @@ def main(log_file=None):
             data_args.instruction_template,
             data_args.auto_detect_format,
             data_args.template_format,
+            detected_format=detected_format,
         )
 
         eval_dataset = None
@@ -1235,6 +1240,7 @@ def main(log_file=None):
                 data_args.instruction_template,
                 data_args.auto_detect_format,
                 data_args.template_format,
+                detected_format=detected_format,
             )
 
         # Create data collator

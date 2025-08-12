@@ -162,6 +162,14 @@ class TestDatasetFormatter:
         data3 = [{"prompt": "Complete this", "completion": "sentence"}]
         assert DatasetFormatter.detect_format(data3) == ("prompt", "completion")
 
+        # Test context-response format (lowercase)
+        data4 = [{"context": "Some context", "response": "Some response"}]
+        assert DatasetFormatter.detect_format(data4) == ("context", "response")
+
+        # Test Context-Response format (capitalized)
+        data5 = [{"Context": "Some context", "Response": "Some response"}]
+        assert DatasetFormatter.detect_format(data5) == ("Context", "Response")
+
     def test_integration_with_instruction_dataset(self):
         """Test integration with InstructionDataset using system-user-assistant format."""
         tokenizer = MockTokenizer()

@@ -56,6 +56,11 @@ class DatasetFormatter:
             "instruction": item["context"],
             "response": item["response"],
         },
+        # Context-Response formats (capitalized - common in some datasets)
+        ("Context", "Response"): lambda item: {
+            "instruction": item["Context"],
+            "response": item["Response"],
+        },
         # Context-based formats
         ("context", "question", "answer"): lambda item: {
             "instruction": f"Context: {item['context']}\n\nQuestion: {item['question']}",
@@ -110,6 +115,7 @@ class DatasetFormatter:
             ("prompt", "response"),
             ("question", "answer"),
             ("context", "response"),  # Context-response format
+            ("Context", "Response"),  # Context-Response format (capitalized)
             ("context", "question", "answer"),
             ("text",),
         ]

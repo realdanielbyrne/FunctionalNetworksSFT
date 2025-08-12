@@ -36,10 +36,10 @@ lora_target_modules: null  # Auto-detect target modules
 # Training Configuration
 #max_steps: 5 # Uncomment to override num_train_epochs
 num_train_epochs: 2     # Exactly 2 epochs as specified
-per_device_train_batch_size: 1
+per_device_train_batch_size: 2
 per_device_eval_batch_size: 1
-gradient_accumulation_steps: 1
-learning_rate: 0.0002   # Higher learning rate for PEFT
+gradient_accumulation_steps: 2
+learning_rate: 0.0005   # Higher learning rate for PEFT
 weight_decay: 0.001
 warmup_ratio: 0.03
 lr_scheduler_type: "cosine"
@@ -80,9 +80,9 @@ gguf_quantization: "q4_0"
 # ICA masking (ENABLED for Experiment B) - THE ONLY DIFFERENCE
 mask_mode: "key"        # Enable ICA masking in "key" mode
 ica_mask_path: null    # Compute mask on-the-fly
-ica_components: 20      # Number of ICA components
+ica_components: 15      # Number of ICA components
 ica_percentile: 95.0    # Percentile threshold for neuron selection
-ica_selection_mode: "max_abs"  # max_abs, l2, or topk
+ica_selection_mode: "topk"  # max_abs, l2, or topk
 
 # Authentication
 use_auth_token: true    # For gated model access

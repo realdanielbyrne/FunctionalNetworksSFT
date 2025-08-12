@@ -6350,4 +6350,4 @@ dev = ["ipywidgets", "jupyter", "matplotlib", "seaborn"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "a2aabc1f5b3f49dc81df413b97cd0de65b4b57b7ff243ed9cbdda2291ca644da"
+content-hash = "0e1a661d972dac5eb3c830784a4a5c75751399e140cd4a7e400c213e0d8eaa7c"

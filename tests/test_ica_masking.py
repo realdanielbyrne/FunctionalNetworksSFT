@@ -3,8 +3,7 @@
 Unit tests for ICA masking functionality in FunctionalNetworksSFT.
 
 Tests the ICA-based functional network masking features including:
-- apply_ica_masks function
-- compute_ica_masks_for_model function
+- ICAMask class methods
 - Command line argument integration
 - Mask application and removal
 """
@@ -24,10 +23,7 @@ import numpy as np
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.functionalnetworkssft.fnsft_trainer import (
-    apply_ica_masks,
-    compute_ica_masks_for_model,
-)
+from src.functionalnetworkssft.ica_mask import ICAMask
 
 
 class MockLinearModule(nn.Module):
@@ -67,7 +63,7 @@ class MockModel(nn.Module):
         self.config.n_embd = None
         self.config.d_model = None
 
-        # Create mock transformer structure that matches what apply_ica_masks expects
+        # Create mock transformer structure that matches what ICAMask.apply_masks expects
         self.model = nn.Module()
         self.model.layers = nn.ModuleList(
             [
@@ -137,7 +133,8 @@ class TestICAMasking(unittest.TestCase):
 
     def test_apply_ica_masks_key_mode(self):
         """Test applying ICA masks in 'key' mode (ablate key neurons)."""
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, self.mask_dict, mask_mode="key")
 
         # Should return handles for each layer
         self.assertEqual(len(handles), self.num_layers)
@@ -152,7 +149,10 @@ class TestICAMasking(unittest.TestCase):
 
     def test_apply_ica_masks_complement_mode(self):
         """Test applying ICA masks in 'complement' mode (keep only key neurons)."""
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="complement")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(
+            self.model, self.mask_dict, mask_mode="complement"
+        )
 
         # Should return handles for each layer
         self.assertEqual(len(handles), self.num_layers)
@@ -164,7 +164,8 @@ class TestICAMasking(unittest.TestCase):
     def test_apply_ica_masks_empty_dict(self):
         """Test applying ICA masks with empty mask dictionary."""
         empty_mask_dict = {}
-        handles = apply_ica_masks(self.model, empty_mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, empty_mask_dict, mask_mode="key")
 
         # Should still return handles (but masks will be all ones/zeros)
         self.assertEqual(len(handles), self.num_layers)
@@ -178,8 +179,9 @@ class TestICAMasking(unittest.TestCase):
         invalid_model = nn.Linear(10, 10)
 
         # This should raise an AttributeError because Linear doesn't have config
+        ica_mask = ICAMask()
         with self.assertRaises(AttributeError):
-            apply_ica_masks(invalid_model, self.mask_dict, mask_mode="key")
+            ica_mask.apply_masks(invalid_model, self.mask_dict, mask_mode="key")
 
 
 class TestICAMaskComputation(unittest.TestCase):
@@ -191,7 +193,7 @@ class TestICAMaskComputation(unittest.TestCase):
         self.dataset = MockDataset(size=20)
         self.tokenizer = Mock()
 
-    @patch("src.functionalnetworkssft.fnsft_trainer.FastICA")
+    @patch("src.functionalnetworkssft.ica_mask.FastICA")
     @patch("torch.utils.data.DataLoader")
     def test_compute_ica_masks_for_model(self, mock_dataloader, mock_fastica):
         """Test computing ICA masks for model."""
@@ -215,13 +217,15 @@ class TestICAMaskComputation(unittest.TestCase):
         with patch.object(self.model, "forward") as mock_forward:
             mock_forward.return_value = torch.randn(1, 128, 768)
 
-            result = compute_ica_masks_for_model(
-                self.model,
-                self.dataset,
-                self.tokenizer,
+            ica_mask = ICAMask(
                 num_components=20,
                 percentile=98.0,
                 sample_batches=10,
+            )
+            result = ica_mask.compute_masks_for_model(
+                self.model,
+                self.dataset,
+                self.tokenizer,
             )
 
         # Should return a dictionary with layer indices as keys

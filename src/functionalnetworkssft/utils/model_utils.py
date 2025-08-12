@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import platform
+import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -361,3 +362,64 @@ def save_model_and_tokenizer(
             logger.info("Full model weights saved")
 
     logger.info("Model and tokenizer saved successfully")
+
+
+def convert_to_gguf(
+    model_path: str, output_path: str, quantization: str = "q4_0"
+) -> None:
+    """
+    Convert model to GGUF format for Ollama compatibility.
+
+    Args:
+        model_path (str): Path to the model directory to convert
+        output_path (str): Path where the GGUF file should be saved
+        quantization (str): GGUF quantization type (e.g., "q4_0", "q8_0", "f16")
+
+    Raises:
+        FileNotFoundError: If the model path doesn't exist
+        subprocess.CalledProcessError: If the conversion command fails
+        Exception: For other conversion errors
+    """
+    try:
+        logger.info(f"Converting model to GGUF format: {quantization}")
+
+        # Validate inputs
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+
+        # Create output directory if it doesn't exist
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        # Check if llama.cpp convert script exists
+        convert_script = "convert-hf-to-gguf.py"
+
+        cmd = [
+            "python",
+            convert_script,
+            model_path,
+            "--outfile",
+            output_path,
+            "--outtype",
+            quantization,
+        ]
+
+        logger.info(f"Running GGUF conversion command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        if result.returncode == 0:
+            logger.info(f"✅ Successfully converted to GGUF: {output_path}")
+        else:
+            logger.error(f"GGUF conversion failed: {result.stderr}")
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
+
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {e}")
+        raise
+    except subprocess.CalledProcessError as e:
+        logger.error(f"GGUF conversion command failed: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error during GGUF conversion: {e}")
+        raise

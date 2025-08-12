@@ -37,7 +37,6 @@ from typing import Dict, List, Optional, Union, Any, Literal
 import warnings
 
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset
 import transformers
 from transformers.utils.quantization_config import BitsAndBytesConfig
@@ -53,17 +52,12 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.modeling_utils import PreTrainedModel
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
-from huggingface_hub import HfApi, login, whoami
-from huggingface_hub.errors import RepositoryNotFoundError, HfHubHTTPError
 import wandb
 from tqdm.auto import tqdm
 
-# ===================== ICA helpers =====================
-from sklearn.decomposition import FastICA
+# ===================== Legacy ICA helpers (for backward compatibility) =====================
 import numpy as np
 import json
-from collections import defaultdict
-import itertools
 
 
 # Suppress warnings for cleaner output
@@ -209,564 +203,12 @@ from .utils.model_utils import (
     load_dataset_from_path,
     split_dataset,
     save_model_and_tokenizer,
+    convert_to_gguf,
 )
 
-
-def apply_ica_masks(
-    model: PreTrainedModel, mask_dict: Dict[str, List[int]], mask_mode: str = "key"
-):
-    """
-    Inject forward pre-hooks that multiply the *input* of each MLP
-    down-projection by a binary mask.  Implementation follows the
-    reference design  [oai_citation:1‡ICA-Based Functional Network Masking for LLM Fine-Tuning.pdf](file-service://file-78U49V8bsfQqVCbLViHD19).
-    """
-    handles = []
-    hidden_size = (
-        getattr(model.config, "hidden_size", None)
-        or getattr(model.config, "n_embd", None)
-        or getattr(model.config, "d_model", None)
-        or model.get_input_embeddings().embedding_dim
-    )
-
-    # Locate decoder blocks (works for GPT-like and Llama-like layouts)
-    # Handle PEFT models by accessing the base model
-    actual_model: Any = model
-    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
-        # PEFT model: access the underlying model
-        actual_model = model.base_model.model
-    elif hasattr(model, "base_model"):
-        # PEFT model with different structure
-        actual_model = model.base_model
-
-    if hasattr(actual_model, "transformer"):
-        blocks = getattr(actual_model.transformer, "h", None) or getattr(
-            actual_model.transformer, "blocks", None
-        )
-    elif hasattr(actual_model, "model"):
-        blocks = getattr(actual_model.model, "layers", None) or getattr(
-            actual_model.model, "decoder", None
-        )
-    else:
-        blocks = None
-    if blocks is None:
-        logger.warning("Could not find transformer blocks – no masking applied.")
-        return handles
-
-    for layer_idx, block in enumerate(blocks):
-        for name, module in block.named_modules():
-            # pick the *second* Linear in the MLP (in_features > hidden_size)
-            # For PEFT models, we need to apply hooks to the base layer, not the PEFT wrapper
-            target_module = module
-
-            # Identify linear or equivalent modules by type and shape
-            if isinstance(module, torch.nn.Linear):
-                in_features, out_features = module.in_features, module.out_features
-            elif (
-                module.__class__.__name__ == "Linear8bitLt"
-            ):  # bitsandbytes 8-bit quantized linear
-                in_features, out_features = module.in_features, module.out_features
-            elif module.__class__.__name__ == "Linear4bit":  # bitsandbytes 4-bit
-                in_features, out_features = module.in_features, module.out_features
-            elif hasattr(module, "base_layer"):
-                # PEFT wrapped layer (e.g., LoRA) - use the base layer for hooks
-                base_layer = module.base_layer
-                target_module = base_layer  # Apply hook to base layer, not PEFT wrapper
-                if hasattr(base_layer, "in_features"):
-                    # Standard Linear layer
-                    in_features, out_features = (
-                        base_layer.in_features,
-                        base_layer.out_features,
-                    )
-                elif hasattr(base_layer, "nf") and hasattr(base_layer, "nx"):
-                    # Conv1D layer (used in GPT models) - nf is out_features, nx is in_features
-                    in_features, out_features = base_layer.nx, base_layer.nf
-                else:
-                    continue
-            elif hasattr(module, "nf") and hasattr(module, "nx"):
-                # Direct Conv1D layer
-                in_features, out_features = module.nx, module.nf
-            else:
-                continue
-            if out_features == hidden_size and in_features > out_features:
-                neuron_ids = mask_dict.get(str(layer_idx), [])
-
-                # Create mask completely outside gradient computation
-                with torch.no_grad():
-                    if mask_mode == "key":  # zero the key neurons
-                        mask = torch.ones(in_features, dtype=torch.float32)
-                        mask[neuron_ids] = 0.0
-                    else:  # zero everything *except* key neurons
-                        mask = torch.zeros(in_features, dtype=torch.float32)
-                        mask[neuron_ids] = 1.0
-                    # Ensure mask requires no gradients
-                    mask.requires_grad_(False)
-
-                def pre_hook(mod, inp, mask_tensor=mask):
-                    # Handle both tuple and single tensor inputs
-                    if isinstance(inp, tuple):
-                        x = inp[0]
-                        # Create mask on correct device and ensure it doesn't require gradients
-                        mask_device = mask_tensor.to(device=x.device, dtype=x.dtype)
-                        mask_device.requires_grad_(False)
-                        # Apply mask by element-wise multiplication, preserving gradient flow for unmasked elements
-                        masked_x = x * mask_device
-                        return (masked_x,) + inp[1:]
-                    else:
-                        # Single tensor input
-                        mask_device = mask_tensor.to(device=inp.device, dtype=inp.dtype)
-                        mask_device.requires_grad_(False)
-                        return inp * mask_device
-
-                # Apply hook to the target module (base layer for PEFT, original module otherwise)
-                handles.append(target_module.register_forward_pre_hook(pre_hook))
-                break  # stop after first matching linear in this block
-    return handles
-
-
-# ------------------------------------------------------------
-
-
-def parse_layer_specification(layer_spec: str, total_layers: int) -> List[int]:
-    """
-    Parse layer specification string into a list of layer indices.
-
-    Args:
-        layer_spec: String specifying layers (e.g., "0", "0,3,7", "0:4,5:6,9:", "0,2:5,8")
-        total_layers: Total number of layers in the model
-
-    Returns:
-        List of layer indices that should receive ICA masking
-
-    Raises:
-        ValueError: If the specification format is invalid
-    """
-    if not layer_spec or not layer_spec.strip():
-        raise ValueError("Layer specification cannot be empty")
-
-    layer_indices = set()
-
-    # Split by comma to handle multiple specifications
-    parts = [part.strip() for part in layer_spec.split(",")]
-
-    for part in parts:
-        if not part:
-            continue
-
-        if ":" in part:
-            # Handle range specification (e.g., "0:4", ":3", "5:", "2:8")
-            try:
-                start_str, end_str = part.split(":", 1)
-
-                # Parse start index
-                if start_str == "":
-                    start = 0
-                else:
-                    start = int(start_str)
-                    if start < 0:
-                        raise ValueError(f"Start index cannot be negative: {start}")
-
-                # Parse end index
-                if end_str == "":
-                    end = total_layers
-                else:
-                    end = int(end_str)
-                    if end < 0:
-                        raise ValueError(f"End index cannot be negative: {end}")
-
-                # Validate range
-                if start >= total_layers:
-                    raise ValueError(
-                        f"Start index {start} exceeds total layers {total_layers}"
-                    )
-                if end > total_layers:
-                    raise ValueError(
-                        f"End index {end} exceeds total layers {total_layers}"
-                    )
-                if start >= end:
-                    raise ValueError(f"Invalid range: start {start} >= end {end}")
-
-                # Add range to set
-                layer_indices.update(range(start, end))
-
-            except ValueError as e:
-                if "invalid literal for int()" in str(e):
-                    raise ValueError(
-                        f"Invalid range format: '{part}'. Expected format like '0:4', ':3', '5:', etc."
-                    )
-                else:
-                    raise
-        else:
-            # Handle single layer specification
-            try:
-                layer_idx = int(part)
-                if layer_idx < 0:
-                    raise ValueError(f"Layer index cannot be negative: {layer_idx}")
-                if layer_idx >= total_layers:
-                    raise ValueError(
-                        f"Layer index {layer_idx} exceeds total layers {total_layers}"
-                    )
-                layer_indices.add(layer_idx)
-            except ValueError as e:
-                if "invalid literal for int()" in str(e):
-                    raise ValueError(
-                        f"Invalid layer index: '{part}'. Expected integer."
-                    )
-                else:
-                    raise
-
-    if not layer_indices:
-        raise ValueError("No valid layer indices found in specification")
-
-    return sorted(list(layer_indices))
-
-
-def compute_ica_masks_for_model(
-    model: PreTrainedModel,
-    dataset: Dataset,
-    tokenizer: PreTrainedTokenizerBase,
-    num_components: int = 20,
-    percentile: float = 98.0,
-    selection_mode: Literal["max_abs", "l2", "topk"] = "max_abs",
-    sample_batches: int = 100,
-    clip_activations: bool = False,
-    target_layers: Optional[List[int]] = None,
-):
-    """
-    Lightweight, on-the-fly ICA (FastICA) over MLP activations.
-    Adapted from the pseudocode in the paper  [oai_citation:2‡ICA-Based Functional Network Masking for LLM Fine-Tuning.pdf](file-service://file-78U49V8bsfQqVCbLViHD19).
-    Only a *sample* of the dataset is streamed to limit RAM/CPU use.
-    Returns a `mask_dict` ready for `apply_ica_masks`.
-
-    Args:
-        model: The transformer model to analyze
-        dataset: Dataset to sample activations from
-        tokenizer: Tokenizer for the model
-        num_components: Number of ICA components to extract
-        percentile: Percentile threshold for neuron selection
-        sample_batches: Number of batches to sample for ICA
-        clip_activations: Whether to clip extreme activation values
-        target_layers: List of layer indices to process. If None, process all layers.
-
-    Args:
-        clip_activations: If True, applies aggressive outlier removal and clipping for numerical stability.
-                         Disabled by default since the original numerical issues were due to analyzing
-                         untrained LoRA adapter weights instead of base model activations.
-    """
-    logger.info("Running ICA to discover functional networks – this can be slow…")
-    if target_layers is not None:
-        logger.info(f"ICA will be applied only to layers: {target_layers}")
-        logger.info(
-            f"num_components: {num_components}, percentile: {percentile}, selection_mode: {selection_mode}"
-        )
-    else:
-        logger.info("ICA will be applied to all layers (default behavior)")
-    model.eval()
-    device = next(model.parameters()).device
-
-    # 1. collect activations
-    activations = defaultdict(list)
-    hooks = []
-
-    def capture(layer_idx):
-        def _hook(_, __, out):
-            # out: [B, T, d_int]  -> flatten B*T
-            # Convert to float32 for numerical stability in ICA computation
-            out_float = out.detach().cpu().float()
-
-            # Debug: Check what we're actually capturing
-            if len(activations[layer_idx]) == 0:  # First capture for this layer
-                logger.debug(
-                    f"Layer {layer_idx}: First capture - shape: {out_float.shape}, "
-                    f"range: [{torch.min(out_float):.6f}, {torch.max(out_float):.6f}], "
-                    f"mean: {torch.mean(out_float):.6f}, std: {torch.std(out_float):.6f}"
-                )
-
-            activations[layer_idx].append(out_float)
-
-        return _hook
-
-    # attach capture hooks on the MLP *intermediate* output
-    # Use the same logic as apply_ica_masks for consistency
-
-    # Handle PEFT models - get the actual base model for ICA computation
-    # IMPORTANT: We use the base model because LoRA adapters are blank at training start
-    actual_model: Any = model
-    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
-        # PEFT model: model.base_model.model is the actual transformer
-        actual_model = model.base_model.model
-    elif hasattr(model, "base_model"):
-        # Some PEFT configurations: model.base_model is the actual transformer
-        actual_model = model.base_model
-
-    # Now find transformer blocks in the actual model
-    if hasattr(actual_model, "transformer"):
-        blocks = getattr(actual_model.transformer, "h", None) or getattr(
-            actual_model.transformer, "blocks", None
-        )
-    elif hasattr(actual_model, "model"):
-        blocks = getattr(actual_model.model, "layers", None) or getattr(
-            actual_model.model, "decoder", None
-        )
-    elif hasattr(actual_model, "layers"):
-        # Direct access to layers (some model architectures)
-        blocks = actual_model.layers
-    else:
-        blocks = None
-
-    if blocks is None:
-        logger.error("Could not find transformer blocks in model for ICA computation")
-        return {}
-
-    hooks_attached = 0
-    for i, block in enumerate(blocks):
-        # Skip layers not in target_layers if filtering is enabled
-        if target_layers is not None and i not in target_layers:
-            logger.debug(f"Block {i}: Skipping (not in target layers)")
-            continue
-
-        # Hook into the base model layers, not LoRA adapters
-        up_proj = None
-        logger.debug(f"Block {i}: Searching for base model linear layers...")
-
-        # For GPT-style models, look for the MLP layers
-        if hasattr(block, "mlp"):
-            mlp = block.mlp
-            # Look for the first linear layer in MLP (usually c_fc for GPT models)
-            if hasattr(mlp, "c_fc"):
-                # Get the base layer, not the LoRA wrapper
-                base_layer = mlp.c_fc
-                if hasattr(base_layer, "base_layer"):
-                    # This is a LoRA-wrapped layer, get the original
-                    up_proj = base_layer.base_layer
-                    logger.debug(f"  Found base layer: c_fc (base_layer)")
-                else:
-                    # This is the original layer
-                    up_proj = base_layer
-                    logger.debug(f"  Found original layer: c_fc")
-            elif hasattr(mlp, "up_proj"):
-                # Llama-style models
-                base_layer = mlp.up_proj
-                if hasattr(base_layer, "base_layer"):
-                    up_proj = base_layer.base_layer
-                    logger.debug(f"  Found base layer: up_proj (base_layer)")
-                else:
-                    up_proj = base_layer
-                    logger.debug(f"  Found original layer: up_proj")
-
-        # Fallback: search for any suitable linear layer in the base model
-        if up_proj is None:
-            for n, m in block.named_modules():
-                # Skip LoRA adapter layers
-                if "lora" in n.lower() or "adapter" in n.lower():
-                    continue
-
-                # Check for Linear layers
-                if isinstance(m, nn.Linear) and m.out_features > m.in_features:
-                    up_proj = m
-                    logger.debug(f"  Found fallback layer '{n}'")
-                    break
-                # Check for Conv1D layers (used in GPT models)
-                elif hasattr(m, "weight") and len(m.weight.shape) == 2:
-                    # Conv1D layer - weight shape is [out_features, in_features]
-                    in_feat, out_feat = m.weight.shape[1], m.weight.shape[0]
-                    if out_feat > in_feat:
-                        up_proj = m
-                        logger.debug(f"  Found fallback Conv1D layer '{n}'")
-                        break
-
-        if up_proj is not None:
-            hooks.append(up_proj.register_forward_hook(capture(i)))
-            hooks_attached += 1
-            logger.debug(f"Attached hook to block {i} base layer")
-        else:
-            logger.warning(
-                f"No suitable base model layer found in block {i}, skipping ICA hook"
-            )
-
-    logger.debug(f"Total hooks attached: {hooks_attached}")
-
-    # 2. feed a few mini-batches
-    dl = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
-    with torch.no_grad():
-        for idx, sample in enumerate(itertools.islice(dl, sample_batches)):
-            model(
-                input_ids=sample["input_ids"].to(device),
-                attention_mask=sample["attention_mask"].to(device),
-            )
-            if idx and idx % 10 == 0:
-                logger.info(f"  captured {idx}/{sample_batches} batches…")
-
-    for h in hooks:
-        h.remove()
-    logger.info("Removed activation capture hooks")
-
-    # 3. concatenate and run ICA
-    logger.info(f"Processing activations for {len(activations)} layers...")
-    layer_masks = {}
-    for layer_idx, acts in activations.items():
-        logger.info(f"Layer {layer_idx}: Processing {len(acts)} activation batches...")
-        X = torch.cat(acts, dim=0).flatten(0, 1).numpy()  # [time, neurons]
-        logger.info(f"Layer {layer_idx}: Concatenated data shape: {X.shape}")
-
-        # Check if we have enough data for ICA
-        if X.shape[0] < num_components or X.shape[1] < num_components:
-            logger.warning(
-                f"Insufficient data for ICA on layer {layer_idx} (shape: {X.shape}), skipping."
-            )
-            continue
-
-        # More robust numerical checks and preprocessing
-        logger.debug(f"Layer {layer_idx}: Raw data shape: {X.shape}, dtype: {X.dtype}")
-        logger.debug(
-            f"Layer {layer_idx}: Raw data range: [{np.min(X):.6f}, {np.max(X):.6f}]"
-        )
-        logger.debug(
-            f"Layer {layer_idx}: NaN count: {np.sum(np.isnan(X))}, Inf count: {np.sum(np.isinf(X))}"
-        )
-
-        # # Remove any extreme outliers that could cause numerical issues
-        # X_finite = X[
-        #     np.isfinite(X).all(axis=1)
-        # ]  # Keep only rows with all finite values
-        # if X_finite.shape[0] < X.shape[0] * 0.8:  # If we lose more than 20% of data
-        #     logger.warning(
-        #         f"Too many non-finite values in layer {layer_idx} ({X.shape[0] - X_finite.shape[0]} / {X.shape[0]}), skipping ICA."
-        #     )
-        #     continue
-        # X = X_finite
-
-        # Check for numerical issues after cleaning
-        if np.any(np.isnan(X)) or np.any(np.isinf(X)):
-            logger.warning(
-                f"NaN or Inf values still present in layer {layer_idx} after cleaning, skipping ICA."
-            )
-            continue
-
-        # Optional outlier removal and clipping (disabled by default)
-        if clip_activations:
-            # More aggressive outlier removal - remove extreme values
-            X_percentiles = np.percentile(X, [1, 99], axis=0)
-            X_clipped = np.clip(X, X_percentiles[0], X_percentiles[1])
-            logger.debug(
-                f"Layer {layer_idx}: Applied outlier clipping to 1st-99th percentiles"
-            )
-        else:
-            X_clipped = X
-
-        # Standard standardization (zero-mean, unit-variance)
-        X_mean = np.mean(X_clipped, axis=0)
-        X_std_dev = np.std(X_clipped, axis=0)
-        # Avoid division by very small numbers
-        X_std_dev = np.maximum(X_std_dev, 1e-8)  # More conservative threshold
-        X_std = (X_clipped - X_mean) / X_std_dev
-
-        # Optional final clipping for numerical stability (disabled by default)
-        if clip_activations:
-            X_std = np.clip(X_std, -5.0, 5.0)
-            logger.debug(f"Layer {layer_idx}: Applied final clipping to [-5.0, 5.0]")
-
-        # Final check after all preprocessing
-        if np.any(np.isnan(X_std)) or np.any(np.isinf(X_std)):
-            logger.warning(
-                f"NaN or Inf values in preprocessed data for layer {layer_idx}, skipping ICA."
-            )
-            continue
-
-        logger.debug(
-            f"Layer {layer_idx}: Preprocessed data range: [{np.min(X_std):.6f}, {np.max(X_std):.6f}]"
-        )
-
-        # Use a more conservative number of components if needed
-        effective_components = min(num_components, X.shape[0] // 2, X.shape[1] // 2)
-        logger.info(f"Layer {layer_idx}: Using {effective_components} ICA components")
-        if effective_components < 2:
-            logger.warning(
-                f"Too few effective components ({effective_components}) for layer {layer_idx}, skipping."
-            )
-            continue
-
-        logger.info(f"Layer {layer_idx}: Starting FastICA computation...")
-        ica = FastICA(
-            n_components=effective_components, random_state=0, max_iter=100, tol=1e-3
-        )
-        try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=RuntimeWarning)
-                logger.info(f"Layer {layer_idx}: Running ICA fit_transform...")
-                A = ica.fit_transform(X_std).T  # components × time
-                mixing = ica.mixing_  # [neurons, components]
-                logger.info(f"Layer {layer_idx}: ICA completed successfully")
-
-            # Check if ICA converged properly
-            if np.any(np.isnan(mixing)) or np.any(np.isinf(mixing)):
-                logger.warning(
-                    f"ICA produced NaN/Inf values for layer {layer_idx}, skipping."
-                )
-                continue
-
-        except (ValueError, RuntimeWarning, np.linalg.LinAlgError) as e:
-            logger.warning(f"ICA failed on layer {layer_idx}: {str(e)}, skipping.")
-            continue
-
-        # 4. score neurons and select based on selection_mode
-        try:
-            if selection_mode == "max_abs":
-                scores = np.max(np.abs(mixing), axis=1)
-                thr = np.percentile(scores, percentile)
-                key_neurons = np.flatnonzero(scores >= thr).tolist()
-            elif selection_mode == "l2":
-                scores = np.linalg.norm(mixing, ord=2, axis=1)
-                thr = np.percentile(scores, percentile)
-                key_neurons = np.flatnonzero(scores >= thr).tolist()
-            elif selection_mode == "topk":
-                scores = np.max(np.abs(mixing), axis=1)
-                k = max(1, int(round((100.0 - percentile) / 100.0 * scores.shape[0])))
-                key_neurons = np.argsort(scores)[-k:].tolist()
-            else:
-                raise ValueError(f"Unknown ICA selection_mode: {selection_mode}")
-            if key_neurons:
-                # Deduplicate while preserving order
-                seen = set()
-                key_neurons = [n for n in key_neurons if not (n in seen or seen.add(n))]
-                layer_masks[str(layer_idx)] = key_neurons
-                logger.debug(
-                    f"Layer {layer_idx}: selection_mode={selection_mode}, selected {len(key_neurons)} neurons"
-                )
-        except Exception as e:
-            logger.warning(
-                f"Failed to compute percentile threshold for layer {layer_idx}: {str(e)}, skipping."
-            )
-            continue
-
-    total_masked_neurons = sum(len(v) for v in layer_masks.values())
-    if total_masked_neurons == 0:
-        logger.warning(
-            "ICA failed to identify any neurons for masking. Training will proceed without masking."
-        )
-    else:
-        logger.info(
-            f"ICA complete – masking {total_masked_neurons} neurons across {len(layer_masks)} layers."
-        )
-
-    # Clean up memory after ICA computation
-    logger.info("Cleaning up ICA computation memory...")
-    del activations
-    # Also clean up any other large variables
-    import gc
-
-    gc.collect()
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        logger.info("Cleared CUDA cache")
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        torch.mps.empty_cache()
-        logger.info("Cleared MPS cache")
-
-    return layer_masks
-
-
-# ============================================================
+# Import new modular utilities
+from .utils.hf_utilities import upload_to_hub
+from .ica_mask import ICAMask
 
 
 class InstructionDataset(Dataset):
@@ -814,7 +256,7 @@ class InstructionDataset(Dataset):
                 sample_converted = DatasetFormatter.convert_to_standard_format(
                     data[0], self.detected_format
                 )
-                logger.info(f"Sample conversion: {data[0]} -> {sample_converted}")
+
         else:
             self.detected_format = None
 
@@ -1236,249 +678,11 @@ def create_trainer(
     return trainer
 
 
-# save_model_and_tokenizer is now imported from utils.model_utils
-
-
-def convert_to_gguf(
-    model_path: str, output_path: str, quantization: str = "q4_0"
-) -> None:
-    """Convert model to GGUF format for Ollama compatibility."""
-    try:
-        import subprocess
-
-        logger.info(f"Converting model to GGUF format: {quantization}")
-
-        # Check if llama.cpp convert script exists
-        convert_script = "convert-hf-to-gguf.py"
-
-        cmd = [
-            "python",
-            convert_script,
-            model_path,
-            "--outfile",
-            output_path,
-            "--outtype",
-            quantization,
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            logger.info(f"Successfully converted to GGUF: {output_path}")
-        else:
-            logger.error(f"GGUF conversion failed: {result.stderr}")
-
-    except ImportError:
-        logger.warning("llama.cpp not available for GGUF conversion")
-    except Exception as e:
-        logger.error(f"Error during GGUF conversion: {e}")
-
-
 def load_config_from_yaml(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
-
-
-def upload_to_hub(
-    model_path: str,
-    tokenizer: PreTrainedTokenizerBase,
-    repo_id: str,
-    commit_message: Optional[str] = None,
-    private: bool = False,
-    token: Optional[str] = None,
-    push_adapter_only: bool = False,
-    use_peft: Optional[bool] = None,
-) -> None:
-    try:
-        logger.info(f"Starting upload to Hugging Face Hub: {repo_id}")
-
-        # Validate inputs
-        if not repo_id or "/" not in repo_id:
-            raise ValueError(
-                "repo_id must be in format 'username/repository-name' or 'organization/repository-name'"
-            )
-
-        if not os.path.exists(model_path):
-            raise ValueError(f"Model path does not exist: {model_path}")
-
-        # Auto-detect training mode if not specified
-        if use_peft is None:
-            use_peft = os.path.exists(os.path.join(model_path, "adapter_config.json"))
-            logger.info(
-                f"Auto-detected training mode: {'PEFT' if use_peft else 'Full fine-tuning'}"
-            )
-
-        # Set default commit message based on training mode
-        if commit_message is None:
-            if use_peft:
-                commit_message = "Upload fine-tuned model with LoRA adapters"
-            else:
-                commit_message = "Upload full fine-tuned model"
-
-        # Handle authentication
-        if token is None:
-            token = os.getenv("HF_TOKEN")
-
-        if token is None:
-            logger.info(
-                "No HF_TOKEN found in environment. Attempting to use cached credentials..."
-            )
-            try:
-                # Check if user is already logged in
-                user_info = whoami(token=token)
-                logger.info(f"Using cached credentials for user: {user_info['name']}")
-            except Exception:
-                logger.info(
-                    "No cached credentials found. Please log in to Hugging Face Hub..."
-                )
-                login()
-        else:
-            logger.info("Using provided authentication token")
-
-        # Initialize HF API
-        api = HfApi(token=token)
-
-        # Check if repository exists, create if it doesn't
-        try:
-            api.repo_info(repo_id=repo_id, repo_type="model")
-            logger.info(f"Repository {repo_id} exists")
-        except RepositoryNotFoundError:
-            logger.info(f"Creating new repository: {repo_id}")
-            api.create_repo(
-                repo_id=repo_id, repo_type="model", private=private, exist_ok=True
-            )
-
-        # Determine which files to upload based on training mode and push_adapter_only flag
-        files_to_upload = []
-
-        if push_adapter_only or (use_peft and not push_adapter_only):
-            # Upload only LoRA adapter files (either explicitly requested or PEFT mode)
-            adapter_files = [
-                "adapter_config.json",
-                "adapter_model.safetensors",
-                "adapter_model.bin",  # fallback for older format
-            ]
-
-            for file_name in adapter_files:
-                file_path = os.path.join(model_path, file_name)
-                if os.path.exists(file_path):
-                    files_to_upload.append(file_name)
-
-            if not files_to_upload:
-                if use_peft:
-                    raise ValueError(
-                        f"No LoRA adapter files found in {model_path}. Model may not be a PEFT model."
-                    )
-                else:
-                    logger.warning(
-                        f"No LoRA adapter files found in {model_path}, falling back to full model upload"
-                    )
-                    push_adapter_only = False
-
-            if files_to_upload:
-                logger.info(f"Uploading LoRA adapter files: {files_to_upload}")
-
-        if not push_adapter_only:
-            # Upload all model files (full model or full model + adapters)
-            if use_peft:
-                logger.info("Uploading full PEFT model (base model + adapters)")
-            else:
-                logger.info("Uploading full fine-tuned model")
-
-        # Upload tokenizer first
-        logger.info("Uploading tokenizer...")
-        if hasattr(tokenizer, "push_to_hub"):
-            tokenizer.push_to_hub(
-                repo_id=repo_id,
-                commit_message=f"{commit_message} - tokenizer",
-                token=token,
-                private=private,
-            )
-
-        # Upload model files
-        if push_adapter_only:
-            # Upload individual adapter files
-            for file_name in files_to_upload:
-                file_path = os.path.join(model_path, file_name)
-                logger.info(f"Uploading {file_name}...")
-                api.upload_file(
-                    path_or_fileobj=file_path,
-                    path_in_repo=file_name,
-                    repo_id=repo_id,
-                    repo_type="model",
-                    commit_message=f"{commit_message} - {file_name}",
-                    token=token,
-                )
-        else:
-            # Upload entire model directory
-            logger.info("Uploading model files...")
-
-            # Load and upload the model using transformers
-            try:
-                # Try to load as PEFT model first
-                from peft import PeftModel, AutoPeftModelForCausalLM
-
-                # Check if this is a PEFT model
-                if os.path.exists(os.path.join(model_path, "adapter_config.json")):
-                    logger.info("Detected PEFT model, uploading with PEFT support...")
-                    model = AutoPeftModelForCausalLM.from_pretrained(model_path)
-                    model.push_to_hub(
-                        repo_id=repo_id,
-                        commit_message=commit_message,
-                        token=token,
-                        private=private,
-                    )
-                else:
-                    # Regular model upload
-                    model = AutoModelForCausalLM.from_pretrained(model_path)
-                    model.push_to_hub(
-                        repo_id=repo_id,
-                        commit_message=commit_message,
-                        token=token,
-                        private=private,
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to upload using transformers: {e}")
-                logger.info("Falling back to file-by-file upload...")
-
-                # Fallback: upload directory contents
-                api.upload_folder(
-                    folder_path=model_path,
-                    repo_id=repo_id,
-                    repo_type="model",
-                    commit_message=commit_message,
-                    token=token,
-                )
-
-        logger.info(f"Successfully uploaded model to: https://huggingface.co/{repo_id}")
-
-    except RepositoryNotFoundError as e:
-        logger.error(f"Repository not found and could not be created: {e}")
-        raise
-    except HfHubHTTPError as e:
-        if "401" in str(e):
-            logger.error(
-                "Authentication failed. Please check your token or run 'huggingface-cli login'"
-            )
-        elif "403" in str(e):
-            logger.error(
-                "Permission denied. Check if you have write access to the repository"
-            )
-        elif "404" in str(e):
-            logger.error(
-                "Repository not found. Make sure the repository name is correct"
-            )
-        else:
-            logger.error(f"HTTP error during upload: {e}")
-        raise
-    except ValueError as e:
-        logger.error(f"Invalid input: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during upload: {e}")
-        raise
 
 
 def main():
@@ -1807,6 +1011,19 @@ def main():
         default=None,
         help="Specify which transformer layers should have ICA masking applied. Supports single layers ('0'), multiple layers ('0,3,7'), ranges ('0:4,5:6,9:'), and mixed formats ('0,2:5,8'). If not provided, ICA masking is applied to all layers (default behavior).",
     )
+    parser.add_argument(
+        "--ica_n_jobs",
+        type=int,
+        default=6,
+        help="Number of parallel jobs for ICA computation. -1 uses all available CPU cores, 1 disables parallelization.",
+    )
+    parser.add_argument(
+        "--ica_backend",
+        type=str,
+        default="threading",
+        choices=["threading", "loky", "multiprocessing"],
+        help="Joblib backend for ICA parallelization. 'threading' is most compatible but may be slower for CPU-intensive tasks. 'loky' or 'multiprocessing' may be faster but can have compatibility issues with some libraries.",
+    )
 
     args = parser.parse_args()
     print(args.hub_token)
@@ -2004,6 +1221,16 @@ def main():
         # ---------- NEW: functional-network masking ----------
         mask_handles = []
         if args.mask_mode is not None:
+            # Initialize ICA mask handler
+            ica_mask = ICAMask(
+                num_components=args.ica_components,
+                percentile=args.ica_percentile,
+                selection_mode=args.ica_selection_mode,
+                sample_batches=50,
+                n_jobs=args.ica_n_jobs,
+                backend=args.ica_backend,
+            )
+
             # Parse layer specification if provided
             target_layers = None
             if args.ica_mask_layers is not None:
@@ -2032,7 +1259,7 @@ def main():
                 if blocks is not None:
                     total_layers = len(blocks)
                     try:
-                        target_layers = parse_layer_specification(
+                        target_layers = ica_mask.parse_layer_specification(
                             args.ica_mask_layers, total_layers
                         )
                         logger.info(
@@ -2052,44 +1279,24 @@ def main():
                     )
 
             if args.ica_mask_path:
-                with open(args.ica_mask_path) as f:
-                    mask_dict = json.load(f)
-                logger.info(f"Loaded pre-computed ICA mask from {args.ica_mask_path}")
+                mask_dict = ica_mask.load_mask(args.ica_mask_path)
 
                 # Filter mask_dict to only include target layers if specified
                 if target_layers is not None:
-                    filtered_mask_dict = {
-                        str(layer): mask_dict[str(layer)]
-                        for layer in target_layers
-                        if str(layer) in mask_dict
-                    }
-                    logger.info(
-                        f"Filtered pre-computed mask to {len(filtered_mask_dict)} layers"
-                    )
-                    mask_dict = filtered_mask_dict
+                    mask_dict = ica_mask.filter_mask_by_layers(mask_dict, target_layers)
             else:
                 # use *training* split to estimate ICA masks quickly
                 sample_for_ica = torch.utils.data.Subset(
                     train_dataset, range(min(1024, len(train_dataset)))
                 )
-                mask_dict = compute_ica_masks_for_model(
-                    model,
-                    sample_for_ica,
-                    tokenizer,
-                    num_components=args.ica_components,
-                    percentile=args.ica_percentile,
-                    selection_mode=args.ica_selection_mode,
-                    sample_batches=50,
-                    target_layers=target_layers,
+                mask_dict = ica_mask.compute_masks_for_model(
+                    model, sample_for_ica, tokenizer, target_layers
                 )
 
                 # Save the computed mask to disk for future use and memory conservation
                 if mask_dict:
                     mask_save_path = os.path.join(args.output_dir, "ica_mask.json")
-                    os.makedirs(args.output_dir, exist_ok=True)
-                    with open(mask_save_path, "w") as f:
-                        json.dump(mask_dict, f, indent=2)
-                    logger.info(f"Saved ICA mask to {mask_save_path} for future use")
+                    ica_mask.save_mask(mask_dict, mask_save_path)
 
             if mask_dict:
                 # Log unique mask coverage per layer
@@ -2098,7 +1305,7 @@ def main():
                     uniq = len(set(idxs))
                     logger.info(f"Layer {lid}: {uniq} masked neurons")
 
-                mask_handles = apply_ica_masks(
+                mask_handles = ica_mask.apply_masks(
                     model, mask_dict, mask_mode=args.mask_mode
                 )
                 logger.info(

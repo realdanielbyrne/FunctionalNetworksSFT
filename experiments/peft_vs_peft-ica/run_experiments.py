@@ -6,7 +6,14 @@ This script runs comprehensive fine-tuning experiments comparing two approaches:
 - Experiment A: PEFT (LoRA) only
 - Experiment B: PEFT (LoRA) + ICA masking
 
-Both experiments use the meta-llama/Llama-3.2-1B-Instruct model and sarcasm dataset.
+Both experiments use the meta-llama/Llama-3.2-1B-Instruct model and mental health dataset.
+
+Data Preprocessing:
+Both experiments apply consistent data preprocessing to ensure fair comparison:
+- Filter Context field: Remove rows where Context length > 1500 characters
+- Filter Response field: Remove rows where Response length > 4000 characters
+- Applied sequentially to maintain data integrity
+- Preprocessing statistics are logged for transparency
 
 Usage:
     python experiments/peft_vs_peft-ica/run_experiments.py [--experiment {a,b,both}] [--verbose]
@@ -176,6 +183,11 @@ def print_experiment_summary():
         f"Dataset: {config_b.get('dataset_name_or_path', '[CONFIG NOT LOADED]')} (3,512 Context-Response pairs)"
     )
     print(f"Training Epochs: {config_b.get('num_train_epochs', '[CONFIG NOT LOADED]')}")
+    print()
+    print("Data Preprocessing:")
+    print("  - Context field length filter: ≤ 1500 characters")
+    print("  - Response field length filter: ≤ 4000 characters")
+    print("  - Applied consistently to both experiments for fair comparison")
     print()
     print("Experiment A: PEFT (LoRA) only")
     print(f"  - LoRA rank: {config_a.get('lora_r', '[CONFIG NOT LOADED]')}")

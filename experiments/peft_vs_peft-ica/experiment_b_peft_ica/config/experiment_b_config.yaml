@@ -45,7 +45,7 @@ warmup_ratio: 0.03
 lr_scheduler_type: "cosine"
 
 # Sequence and Template Configuration
-max_seq_length: 1024    # Reasonable length for Q&A
+max_seq_length: 4096    
 template_format: "auto" # Auto-detect chat template
 
 # Evaluation and Logging

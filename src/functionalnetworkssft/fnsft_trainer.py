@@ -1208,6 +1208,12 @@ def main(log_file=None):
 
         # Load and prepare dataset
         data = load_dataset_from_args(data_args)
+
+        # Apply data preprocessing for experiments (filter by Context and Response lengths)
+        from .utils.model_utils import preprocess_dataset_for_experiments
+
+        data = preprocess_dataset_for_experiments(data)
+
         train_data, val_data = split_dataset(data, data_args.validation_split)
 
         # Create datasets

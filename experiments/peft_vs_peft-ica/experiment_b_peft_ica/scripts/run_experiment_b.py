@@ -63,6 +63,7 @@ def run_experiment_b():
     logger.info(f"ICA Masking: ENABLED ({config.get('mask_mode', 'key')} mode)")
     logger.info(f"ICA Components: {config.get('ica_components', 20)}")
     logger.info(f"ICA Percentile: {config.get('ica_percentile', 98.0)}")
+    logger.info("Data Preprocessing: Context ≤ 1500 chars, Response ≤ 4000 chars")
     logger.info("=" * 80)
 
     # Verify configuration file exists

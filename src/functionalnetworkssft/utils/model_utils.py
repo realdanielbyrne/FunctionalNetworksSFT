@@ -262,6 +262,76 @@ def setup_lora(
     return model
 
 
+def preprocess_dataset_for_experiments(
+    data: List[Dict[str, Any]],
+    context_max_length: int = 1500,
+    response_max_length: int = 4000,
+) -> List[Dict[str, Any]]:
+    """
+    Preprocess dataset by filtering based on Context and Response field lengths.
+
+    Args:
+        data: List of dataset items
+        context_max_length: Maximum allowed length for Context field (default: 1500)
+        response_max_length: Maximum allowed length for Response field (default: 4000)
+
+    Returns:
+        Filtered dataset with items that meet the length criteria
+    """
+    original_count = len(data)
+    logger.info(f"Starting dataset preprocessing with {original_count} examples")
+
+    # Filter by Context length
+    filtered_data = []
+    context_filtered_count = 0
+
+    for item in data:
+        context = item.get("Context", item.get("context", ""))
+        if len(str(context)) <= context_max_length:
+            filtered_data.append(item)
+        else:
+            context_filtered_count += 1
+
+    logger.info(
+        f"Filtered out {context_filtered_count} examples with Context length > {context_max_length} characters"
+    )
+
+    # Filter by Response length
+    final_filtered_data = []
+    response_filtered_count = 0
+
+    for item in filtered_data:
+        response = item.get("Response", item.get("response", ""))
+        if len(str(response)) <= response_max_length:
+            final_filtered_data.append(item)
+        else:
+            response_filtered_count += 1
+
+    logger.info(
+        f"Filtered out {response_filtered_count} examples with Response length > {response_max_length} characters"
+    )
+
+    final_count = len(final_filtered_data)
+    total_filtered = original_count - final_count
+
+    logger.info("=" * 60)
+    logger.info("DATASET PREPROCESSING SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"Original dataset size: {original_count} examples")
+    logger.info(
+        f"Context length filter (>{context_max_length} chars): -{context_filtered_count} examples"
+    )
+    logger.info(
+        f"Response length filter (>{response_max_length} chars): -{response_filtered_count} examples"
+    )
+    logger.info(f"Total filtered out: {total_filtered} examples")
+    logger.info(f"Final dataset size: {final_count} examples")
+    logger.info(f"Retention rate: {(final_count/original_count)*100:.1f}%")
+    logger.info("=" * 60)
+
+    return final_filtered_data
+
+
 def load_dataset_from_path(
     dataset_name_or_path: str,
     dataset_config_name: Optional[str] = None,

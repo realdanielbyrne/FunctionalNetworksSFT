@@ -49,6 +49,7 @@ def run_experiment_a():
     logger.info("Method: PEFT (LoRA) only")
     logger.info("Epochs: 2")
     logger.info("ICA Masking: DISABLED")
+    logger.info("Data Preprocessing: Context ≤ 1500 chars, Response ≤ 4000 chars")
     logger.info("=" * 80)
 
     # Set up the configuration file path (relative to project root)

@@ -74,3 +74,4 @@ mask_mode: null  # "key" or "complement" or null
 ica_mask_path: null
 ica_components: 20
 ica_percentile: 98.0
+ica_dtype: null  # null/float32 (stable), "auto" (match model), "float16"/"bfloat16" (faster)

@@ -48,16 +48,19 @@ class MockModel(nn.Module):
             self.peft_config["default"].lora_alpha = 32
             self.peft_config["default"].lora_dropout = 0.1
             self.peft_config["default"].target_modules = ["linear"]
-        else:
-            self.peft_config = None
+        # Don't set peft_config to None - let PEFT library handle missing attribute
 
     def parameters(self):
         return self.linear.parameters()
 
+    def prepare_inputs_for_generation(self, input_ids, **kwargs):
+        """Mock method required by PEFT."""
+        return {"input_ids": input_ids}
+
     def save_pretrained(self, path):
         """Mock save_pretrained method."""
         os.makedirs(path, exist_ok=True)
-        if self.peft_config:
+        if hasattr(self, "peft_config") and self.peft_config:
             # Create adapter files for PEFT models
             with open(os.path.join(path, "adapter_config.json"), "w") as f:
                 f.write('{"r": 16, "lora_alpha": 32}')
@@ -262,8 +265,8 @@ class TestHubUpload(unittest.TestCase):
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch("functionalnetworkssft.fnsft_trainer.HfApi")
-    @patch("functionalnetworkssft.fnsft_trainer.whoami")
+    @patch("functionalnetworkssft.utils.hf_utilities.HfApi")
+    @patch("functionalnetworkssft.utils.hf_utilities.whoami")
     def test_upload_peft_model(self, mock_whoami, mock_hf_api):
         """Test uploading PEFT model."""
         # Create PEFT model files
@@ -288,8 +291,8 @@ class TestHubUpload(unittest.TestCase):
         # Verify API calls were made
         mock_api_instance.repo_info.assert_called()
 
-    @patch("functionalnetworkssft.fnsft_trainer.HfApi")
-    @patch("functionalnetworkssft.fnsft_trainer.whoami")
+    @patch("functionalnetworkssft.utils.hf_utilities.HfApi")
+    @patch("functionalnetworkssft.utils.hf_utilities.whoami")
     def test_upload_full_model(self, mock_whoami, mock_hf_api):
         """Test uploading full model."""
         # Create full model files
@@ -440,8 +443,8 @@ class TestErrorHandling(unittest.TestCase):
                 repo_id="test/repo",
             )
 
-    @patch("functionalnetworkssft.fnsft_trainer.HfApi")
-    @patch("functionalnetworkssft.fnsft_trainer.whoami")
+    @patch("functionalnetworkssft.utils.hf_utilities.HfApi")
+    @patch("functionalnetworkssft.utils.hf_utilities.whoami")
     def test_missing_adapter_files_peft_upload(self, mock_whoami, mock_hf_api):
         """Test PEFT upload when adapter files are missing."""
         temp_dir = tempfile.mkdtemp()

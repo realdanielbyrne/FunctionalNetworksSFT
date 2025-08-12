@@ -49,6 +49,7 @@ class ICAMask:
         clip_activations: bool = False,
         n_jobs: int = -1,
         backend: str = "threading",
+        ica_dtype: Optional[str] = None,
     ):
         """
         Initialize the ICAMask instance.
@@ -61,6 +62,7 @@ class ICAMask:
             clip_activations: Whether to clip extreme activation values
             n_jobs: Number of parallel jobs for ICA computation (-1 uses all cores)
             backend: Joblib backend for parallelization ('threading', 'loky', 'multiprocessing')
+            ica_dtype: Data type for ICA computation ('float32', 'float16', 'auto', or None for float32)
         """
         self.num_components = num_components
         self.percentile = percentile
@@ -69,8 +71,39 @@ class ICAMask:
         self.clip_activations = clip_activations
         self.n_jobs = n_jobs
         self.backend = backend
+        self.ica_dtype = ica_dtype
         self.mask_dict: Optional[Dict[str, List[int]]] = None
         self.mask_handles: List[Any] = []
+
+    def _get_ica_dtype(self, model_dtype: torch.dtype) -> torch.dtype:
+        """
+        Determine the optimal dtype for ICA computation based on configuration and model dtype.
+
+        Args:
+            model_dtype: The model's current dtype
+
+        Returns:
+            torch.dtype to use for ICA computation
+        """
+        if self.ica_dtype is None or self.ica_dtype == "float32":
+            # Default: use float32 for maximum numerical stability
+            return torch.float32
+        elif self.ica_dtype == "auto":
+            # Auto: match model dtype but ensure minimum precision
+            if model_dtype in [torch.float16, torch.bfloat16]:
+                # For half precision models, use float32 for ICA stability
+                # unless explicitly requested otherwise
+                return torch.float32
+            else:
+                return model_dtype
+        elif self.ica_dtype == "float16":
+            return torch.float16
+        elif self.ica_dtype == "bfloat16":
+            return torch.bfloat16
+        else:
+            # Fallback to float32 for unknown values
+            logger.warning(f"Unknown ica_dtype '{self.ica_dtype}', using float32")
+            return torch.float32
 
     def parse_layer_specification(
         self, layer_spec: str, total_layers: int
@@ -407,6 +440,13 @@ class ICAMask:
         model.eval()
         device = next(model.parameters()).device
 
+        # Determine optimal dtype for ICA computation
+        model_dtype = next(model.parameters()).dtype
+        ica_dtype = self._get_ica_dtype(model_dtype)
+        logger.info(
+            f"Using dtype {ica_dtype} for ICA computation (model dtype: {model_dtype})"
+        )
+
         # 1. collect activations
         activations = defaultdict(list)
         hooks = []
@@ -414,18 +454,19 @@ class ICAMask:
         def capture(layer_idx):
             def _hook(_, __, out):
                 # out: [B, T, d_int]  -> flatten B*T
-                # Convert to float32 for numerical stability in ICA computation
-                out_float = out.detach().cpu().float()
+                # Convert to optimal dtype for ICA computation
+                out_converted = out.detach().cpu().to(ica_dtype)
 
                 # Debug: Check what we're actually capturing
                 if len(activations[layer_idx]) == 0:  # First capture for this layer
                     logger.debug(
-                        f"Layer {layer_idx}: First capture - shape: {out_float.shape}, "
-                        f"range: [{torch.min(out_float):.6f}, {torch.max(out_float):.6f}], "
-                        f"mean: {torch.mean(out_float):.6f}, std: {torch.std(out_float):.6f}"
+                        f"Layer {layer_idx}: First capture - shape: {out_converted.shape}, "
+                        f"dtype: {out_converted.dtype}, "
+                        f"range: [{torch.min(out_converted):.6f}, {torch.max(out_converted):.6f}], "
+                        f"mean: {torch.mean(out_converted):.6f}, std: {torch.std(out_converted):.6f}"
                     )
 
-                activations[layer_idx].append(out_float)
+                activations[layer_idx].append(out_converted)
 
             return _hook
 

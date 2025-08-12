@@ -19,10 +19,10 @@ Usage:
     python experiments/peft_vs_peft-ica/run_experiments.py [--experiment {a,b,both}] [--verbose]
 
 Examples:
-    python experiments/peft_vs_peft-ica/run_experiments.py --experiment a      # Run only Experiment A
-    python experiments/peft_vs_peft-ica/run_experiments.py --experiment b      # Run only Experiment B
-    python experiments/peft_vs_peft-ica/run_experiments.py --experiment both   # Run both experiments
-    python experiments/peft_vs_peft-ica/run_experiments.py                     # Run both experiments (default)
+    python experiments/peft_vs_peft-ica/run_experiments.py --experiment a
+    python experiments/peft_vs_peft-ica/run_experiments.py --experiment b
+    python experiments/peft_vs_peft-ica/run_experiments.py --experiment both
+    python experiments/peft_vs_peft-ica/run_experiments.py
 """
 
 import argparse

@@ -2,9 +2,9 @@
 """
 ICA-based functional network masking utilities for FunctionalNetworksSFT.
 
-This module contains the ICAMask class and related utilities for computing
-and applying ICA-based masks to transformer models for functional network
-analysis and selective fine-tuning.
+Refactored to add a global (group-wise) ICA over concatenated final MLP outputs
+and component-wise masking at the MLP output, while preserving the original
+per-layer ICA over FFN intermediate activations.
 
 Author: Daniel Byrne
 License: MIT
@@ -13,9 +13,7 @@ License: MIT
 import json
 import logging
 import os
-import warnings
 from collections import defaultdict
-from pathlib import Path
 from typing import Dict, List, Optional, Literal, Any, Tuple
 import itertools
 
@@ -24,7 +22,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from sklearn.decomposition import FastICA
-from joblib import Parallel, delayed
 from transformers.modeling_utils import PreTrainedModel
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
@@ -33,47 +30,49 @@ logger = logging.getLogger(__name__)
 
 class ICAMask:
     """
-    A class for computing and applying ICA-based functional network masks to transformer models.
+    Compute and apply ICA-based masks to transformer models.
 
-    This class encapsulates all functionality related to ICA mask computation, application,
-    saving, and loading. It provides a clean interface for functional network masking
-    operations in transformer fine-tuning.
+    Two analysis modes:
+      1) Per-layer FFN-intermediate ICA (original): selects key FFN neurons (d_ff)
+         and masks via pre-hook on the down-projection input.
+      2) Global group-wise ICA (new): concatenates final MLP outputs (hidden_size) across
+         all layers, runs one ICA, and defines one mask per ICA component (functional network).
+         Masks are applied at the MLP output (post-activation, post down-projection).
     """
 
     def __init__(
         self,
         num_components: int = 20,
         percentile: float = 98.0,
-        selection_mode: Literal["max_abs", "l2", "topk"] = "max_abs",
-        sample_batches: int = 50,
-        clip_activations: bool = False,
-        n_jobs: int = -1,
-        backend: str = "threading",
+        sample_batches: int = 100,
         ica_dtype: Optional[str] = None,
     ):
         """
-        Initialize the ICAMask instance.
-
         Args:
-            num_components: Number of ICA components to extract
-            percentile: Percentile threshold for neuron selection
-            selection_mode: Selection mode ("max_abs", "l2", "topk")
+            num_components: Number of ICA components to extract (default for both modes)
+            percentile: Percentile threshold for neuron/component selection
+
             sample_batches: Number of batches to sample for ICA
-            clip_activations: Whether to clip extreme activation values
-            n_jobs: Number of parallel jobs for ICA computation (-1 uses all cores)
-            backend: Joblib backend for parallelization ('threading', 'loky', 'multiprocessing')
-            ica_dtype: Data type for ICA computation ('float32', 'float16', 'auto', or None for float32)
+
+            ica_dtype: 'float32'|'float16'|'bfloat16'|'auto'|None – dtype for ICA math
         """
         self.num_components = num_components
         self.percentile = percentile
-        self.selection_mode = selection_mode
         self.sample_batches = sample_batches
-        self.clip_activations = clip_activations
-        self.n_jobs = n_jobs
-        self.backend = backend
+
         self.ica_dtype = ica_dtype
-        self.mask_dict: Optional[Dict[str, List[int]]] = None
+
+        # Outputs
+        self.mask_dict: Optional[Dict[str, List[int]]] = None  # per-layer FFN masks
         self.mask_handles: List[Any] = []
+
+        # NEW: global component-wise outputs
+        self.mask_dict_components: Optional[Dict[int, Dict[str, List[int]]]] = None
+        self.global_feature_layout: Optional[Dict[str, Any]] = (
+            None  # layers order, hidden_size
+        )
+
+    # ------------------------ Shared utilities ------------------------
 
     def _get_ica_dtype(self, model_dtype: torch.dtype) -> torch.dtype:
         """
@@ -86,13 +85,9 @@ class ICAMask:
             torch.dtype to use for ICA computation
         """
         if self.ica_dtype is None or self.ica_dtype == "float32":
-            # Default: use float32 for maximum numerical stability
             return torch.float32
         elif self.ica_dtype == "auto":
-            # Auto: match model dtype but ensure minimum precision
             if model_dtype in [torch.float16, torch.bfloat16]:
-                # For half precision models, use float32 for ICA stability
-                # unless explicitly requested otherwise
                 return torch.float32
             else:
                 return model_dtype
@@ -101,133 +96,43 @@ class ICAMask:
         elif self.ica_dtype == "bfloat16":
             return torch.bfloat16
         else:
-            # Fallback to float32 for unknown values
             logger.warning(f"Unknown ica_dtype '{self.ica_dtype}', using float32")
             return torch.float32
 
     def parse_layer_specification(
         self, layer_spec: str, total_layers: int
     ) -> List[int]:
-        """
-        Parse layer specification string into a list of layer indices.
-
-        Args:
-            layer_spec: String specifying layers (e.g., "0", "0,3,7", "0:4,5:6,9:", "0,2:5,8")
-            total_layers: Total number of layers in the model
-
-        Returns:
-            List of layer indices that should receive ICA masking
-
-        Raises:
-            ValueError: If the specification format is invalid
-        """
         if not layer_spec or not layer_spec.strip():
             raise ValueError("Layer specification cannot be empty")
 
         layer_indices = set()
-
-        # Split by comma to handle multiple specifications
         parts = [part.strip() for part in layer_spec.split(",")]
-
         for part in parts:
             if not part:
                 continue
-
             if ":" in part:
-                # Handle range specification (e.g., "0:4", ":3", "5:", "2:8")
-                try:
-                    start_str, end_str = part.split(":", 1)
-
-                    # Parse start index
-                    if start_str == "":
-                        start = 0
-                    else:
-                        start = int(start_str)
-                        if start < 0:
-                            raise ValueError(f"Start index cannot be negative: {start}")
-
-                    # Parse end index
-                    if end_str == "":
-                        end = total_layers
-                    else:
-                        end = int(end_str)
-                        if end < 0:
-                            raise ValueError(f"End index cannot be negative: {end}")
-
-                    # Validate range
-                    if start >= total_layers:
-                        raise ValueError(
-                            f"Start index {start} exceeds total layers {total_layers}"
-                        )
-                    if end > total_layers:
-                        raise ValueError(
-                            f"End index {end} exceeds total layers {total_layers}"
-                        )
-                    if start >= end:
-                        raise ValueError(f"Invalid range: start {start} >= end {end}")
-
-                    # Add range to set
-                    layer_indices.update(range(start, end))
-
-                except ValueError as e:
-                    if "invalid literal for int()" in str(e):
-                        raise ValueError(
-                            f"Invalid range format: '{part}'. Expected format like '0:4', ':3', '5:', etc."
-                        )
-                    else:
-                        raise
+                start_str, end_str = part.split(":", 1)
+                start = 0 if start_str == "" else int(start_str)
+                end = total_layers if end_str == "" else int(end_str)
+                if (
+                    start < 0
+                    or end < 0
+                    or start >= total_layers
+                    or end > total_layers
+                    or start >= end
+                ):
+                    raise ValueError(
+                        f"Invalid range: '{part}' for total_layers={total_layers}"
+                    )
+                layer_indices.update(range(start, end))
             else:
-                # Handle single layer specification
-                try:
-                    layer_idx = int(part)
-                    if layer_idx < 0:
-                        raise ValueError(f"Layer index cannot be negative: {layer_idx}")
-                    if layer_idx >= total_layers:
-                        raise ValueError(
-                            f"Layer index {layer_idx} exceeds total layers {total_layers}"
-                        )
-                    layer_indices.add(layer_idx)
-                except ValueError as e:
-                    if "invalid literal for int()" in str(e):
-                        raise ValueError(
-                            f"Invalid layer index: '{part}'. Expected integer."
-                        )
-                    else:
-                        raise
-
+                idx = int(part)
+                if idx < 0 or idx >= total_layers:
+                    raise ValueError(f"Layer index out of range: {idx}")
+                layer_indices.add(idx)
         if not layer_indices:
             raise ValueError("No valid layer indices found in specification")
-
         return sorted(list(layer_indices))
-
-    def save_mask(self, mask_dict: Dict[str, List[int]], file_path: str) -> None:
-        """
-        Save ICA mask dictionary to a JSON file.
-
-        Args:
-            mask_dict: Dictionary mapping layer indices to lists of neuron indices
-            file_path: Path where to save the mask file
-        """
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, "w") as f:
-            json.dump(mask_dict, f, indent=2)
-        logger.info(f"Saved ICA mask to {file_path}")
-
-    def load_mask(self, file_path: str) -> Dict[str, List[int]]:
-        """
-        Load ICA mask dictionary from a JSON file.
-
-        Args:
-            file_path: Path to the mask file
-
-        Returns:
-            Dictionary mapping layer indices to lists of neuron indices
-        """
-        with open(file_path, "r") as f:
-            mask_dict = json.load(f)
-        logger.info(f"Loaded ICA mask from {file_path}")
-        self.mask_dict = mask_dict
-        return mask_dict
 
     def filter_mask_by_layers(
         self, mask_dict: Dict[str, List[int]], target_layers: List[int]
@@ -242,248 +147,18 @@ class ICAMask:
         Returns:
             Filtered mask dictionary
         """
-        filtered_mask_dict = {
-            str(layer): mask_dict[str(layer)]
+        return {
+            str(layer): mask_dict.get(str(layer), [])
             for layer in target_layers
             if str(layer) in mask_dict
         }
-        logger.info(f"Filtered mask to {len(filtered_mask_dict)} layers")
-        return filtered_mask_dict
 
-    def _process_layer_ica(
-        self,
-        layer_idx: int,
-        acts: List[torch.Tensor],
-    ) -> Optional[Tuple[int, List[int]]]:
-        """
-        Process ICA computation for a single layer.
+    # ------------------------ NEW: Global group-wise ICA over final MLP outputs ------------------------
 
-        Args:
-            layer_idx: Layer index
-            acts: List of activation tensors for this layer
-
-        Returns:
-            Tuple of (layer_idx, key_neurons) if successful, None if failed
-        """
-        try:
-            logger.info(
-                f"Layer {layer_idx}: Processing {len(acts)} activation batches..."
-            )
-            X = torch.cat(acts, dim=0).flatten(0, 1).numpy()  # [time, neurons]
-            logger.info(f"Layer {layer_idx}: Concatenated data shape: {X.shape}")
-
-            # Check if we have enough data for ICA
-            if X.shape[0] < self.num_components or X.shape[1] < self.num_components:
-                logger.warning(
-                    f"Insufficient data for ICA on layer {layer_idx} (shape: {X.shape}), skipping."
-                )
-                return None
-
-            # More robust numerical checks and preprocessing
-            logger.debug(
-                f"Layer {layer_idx}: Raw data shape: {X.shape}, dtype: {X.dtype}"
-            )
-            logger.debug(
-                f"Layer {layer_idx}: Raw data range: [{np.min(X):.6f}, {np.max(X):.6f}]"
-            )
-            logger.debug(
-                f"Layer {layer_idx}: NaN count: {np.sum(np.isnan(X))}, Inf count: {np.sum(np.isinf(X))}"
-            )
-
-            # Check for numerical issues after cleaning
-            if np.any(np.isnan(X)) or np.any(np.isinf(X)):
-                logger.warning(
-                    f"NaN or Inf values still present in layer {layer_idx} after cleaning, skipping ICA."
-                )
-                return None
-
-            # Optional outlier removal and clipping (disabled by default)
-            if self.clip_activations:
-                # More aggressive outlier removal - remove extreme values
-                X_percentiles = np.percentile(X, [1, 99], axis=0)
-                X_clipped = np.clip(X, X_percentiles[0], X_percentiles[1])
-                logger.debug(
-                    f"Layer {layer_idx}: Applied outlier clipping to 1st-99th percentiles"
-                )
-            else:
-                X_clipped = X
-
-            # Standard standardization (zero-mean, unit-variance)
-            X_mean = np.mean(X_clipped, axis=0)
-            X_std_dev = np.std(X_clipped, axis=0)
-            # Avoid division by very small numbers
-            X_std_dev = np.maximum(X_std_dev, 1e-8)  # More conservative threshold
-            X_std = (X_clipped - X_mean) / X_std_dev
-
-            # Optional final clipping for numerical stability (disabled by default)
-            if self.clip_activations:
-                X_std = np.clip(X_std, -5.0, 5.0)
-                logger.debug(
-                    f"Layer {layer_idx}: Applied final clipping to [-5.0, 5.0]"
-                )
-
-            # Final check after all preprocessing
-            if np.any(np.isnan(X_std)) or np.any(np.isinf(X_std)):
-                logger.warning(
-                    f"NaN or Inf values in preprocessed data for layer {layer_idx}, skipping ICA."
-                )
-                return None
-
-            logger.debug(
-                f"Layer {layer_idx}: Preprocessed data range: [{np.min(X_std):.6f}, {np.max(X_std):.6f}]"
-            )
-
-            # Use a more conservative number of components if needed
-            effective_components = min(
-                self.num_components, X.shape[0] // 2, X.shape[1] // 2
-            )
-            logger.info(
-                f"Layer {layer_idx}: Using {effective_components} ICA components"
-            )
-            if effective_components < 2:
-                logger.warning(
-                    f"Too few effective components ({effective_components}) for layer {layer_idx}, skipping."
-                )
-                return None
-
-            logger.info(f"Layer {layer_idx}: Starting FastICA computation...")
-            ica = FastICA(
-                n_components=effective_components,
-                random_state=0,
-                max_iter=100,
-                tol=1e-3,
-            )
-
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=RuntimeWarning)
-                logger.info(f"Layer {layer_idx}: Running ICA fit_transform...")
-                A = ica.fit_transform(X_std).T  # components × time
-                mixing = ica.mixing_  # [neurons, components]
-                logger.info(f"Layer {layer_idx}: ICA completed successfully")
-
-            # Check if ICA converged properly
-            if np.any(np.isnan(mixing)) or np.any(np.isinf(mixing)):
-                logger.warning(
-                    f"ICA produced NaN/Inf values for layer {layer_idx}, skipping."
-                )
-                return None
-
-            # Score neurons and select based on selection_mode
-            if self.selection_mode == "max_abs":
-                scores = np.max(np.abs(mixing), axis=1)
-                thr = np.percentile(scores, self.percentile)
-                key_neurons = np.flatnonzero(scores >= thr).tolist()
-            elif self.selection_mode == "l2":
-                scores = np.linalg.norm(mixing, ord=2, axis=1)
-                thr = np.percentile(scores, self.percentile)
-                key_neurons = np.flatnonzero(scores >= thr).tolist()
-            elif self.selection_mode == "topk":
-                scores = np.max(np.abs(mixing), axis=1)
-                k = max(
-                    1, int(round((100.0 - self.percentile) / 100.0 * scores.shape[0]))
-                )
-                key_neurons = np.argsort(scores)[-k:].tolist()
-            else:
-                raise ValueError(f"Unknown ICA selection_mode: {self.selection_mode}")
-
-            if key_neurons:
-                # Deduplicate while preserving order
-                seen = set()
-                key_neurons = [n for n in key_neurons if not (n in seen or seen.add(n))]
-                logger.debug(
-                    f"Layer {layer_idx}: selection_mode={self.selection_mode}, selected {len(key_neurons)} neurons"
-                )
-                return (layer_idx, key_neurons)
-            else:
-                return None
-
-        except (ValueError, RuntimeWarning, np.linalg.LinAlgError) as e:
-            logger.warning(f"ICA failed on layer {layer_idx}: {str(e)}, skipping.")
-            return None
-        except Exception as e:
-            logger.warning(
-                f"Failed to compute percentile threshold for layer {layer_idx}: {str(e)}, skipping."
-            )
-            return None
-
-    def compute_masks_for_model(
-        self,
-        model: PreTrainedModel,
-        dataset: Dataset,
-        tokenizer: PreTrainedTokenizerBase,
-        target_layers: Optional[List[int]] = None,
-    ) -> Dict[str, List[int]]:
-        """
-        Compute ICA masks for a model using the provided dataset.
-
-        Args:
-            model: The transformer model to analyze
-            dataset: Dataset to sample activations from
-            tokenizer: Tokenizer for the model
-            target_layers: List of layer indices to process. If None, process all layers.
-
-        Returns:
-            Dictionary mapping layer indices to lists of neuron indices
-        """
-        logger.info("Running ICA to discover functional networks – this can be slow…")
-        if target_layers is not None:
-            logger.info(f"ICA will be applied only to layers: {target_layers}")
-            logger.info(
-                f"num_components: {self.num_components}, percentile: {self.percentile}, selection_mode: {self.selection_mode}"
-            )
-        else:
-            logger.info("ICA will be applied to all layers (default behavior)")
-
-        # Set environment variable to avoid tokenizer parallelism conflicts
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-        model.eval()
-        device = next(model.parameters()).device
-
-        # Determine optimal dtype for ICA computation
-        model_dtype = next(model.parameters()).dtype
-        ica_dtype = self._get_ica_dtype(model_dtype)
-        logger.info(
-            f"Using dtype {ica_dtype} for ICA computation (model dtype: {model_dtype})"
-        )
-
-        # 1. collect activations
-        activations = defaultdict(list)
-        hooks = []
-
-        def capture(layer_idx):
-            def _hook(_, __, out):
-                # out: [B, T, d_int]  -> flatten B*T
-                # Convert to optimal dtype for ICA computation
-                out_converted = out.detach().cpu().to(ica_dtype)
-
-                # Debug: Check what we're actually capturing
-                if len(activations[layer_idx]) == 0:  # First capture for this layer
-                    logger.debug(
-                        f"Layer {layer_idx}: First capture - shape: {out_converted.shape}, "
-                        f"dtype: {out_converted.dtype}, "
-                        f"range: [{torch.min(out_converted):.6f}, {torch.max(out_converted):.6f}], "
-                        f"mean: {torch.mean(out_converted):.6f}, std: {torch.std(out_converted):.6f}"
-                    )
-
-                activations[layer_idx].append(out_converted)
-
-            return _hook
-
-        # attach capture hooks on the MLP *intermediate* output
-        # Use the same logic as apply_masks for consistency
-
-        # Handle PEFT models - get the actual base model for ICA computation
-        # IMPORTANT: We use the base model because LoRA adapters are blank at training start
-        actual_model: Any = model
-        if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
-            # PEFT model: model.base_model.model is the actual transformer
-            actual_model = model.base_model.model
-        elif hasattr(model, "base_model"):
-            # Some PEFT configurations: model.base_model is the actual transformer
-            actual_model = model.base_model
-
-        # Now find transformer blocks in the actual model
+    def _find_decoder_blocks_and_mlps(
+        self, actual_model: Any
+    ) -> Tuple[Optional[List[Any]], Optional[List[nn.Module]]]:
+        """Return (blocks, mlp_modules) if found, else (None, None)."""
         if hasattr(actual_model, "transformer"):
             blocks = getattr(actual_model.transformer, "h", None) or getattr(
                 actual_model.transformer, "blocks", None
@@ -493,211 +168,234 @@ class ICAMask:
                 actual_model.model, "decoder", None
             )
         elif hasattr(actual_model, "layers"):
-            # Direct access to layers (some model architectures)
             blocks = actual_model.layers
         else:
             blocks = None
-
         if blocks is None:
-            logger.error(
-                "Could not find transformer blocks in model for ICA computation"
-            )
+            return None, None
+
+        mlps: List[Optional[nn.Module]] = []
+        for b in blocks:
+            if hasattr(b, "mlp") and isinstance(b.mlp, nn.Module):
+                mlps.append(b.mlp)
+            else:
+                mlps.append(None)  # not found (model-specific case)
+        return blocks, mlps
+
+    def compute_global_networks(
+        self,
+        model: PreTrainedModel,
+        dataset: Dataset,
+        tokenizer: PreTrainedTokenizerBase,
+        target_layers: Optional[List[int]] = None,
+        n_components: Optional[int] = None,
+        top_percentile_per_component: Optional[float] = None,
+    ) -> Dict[int, Dict[str, List[int]]]:
+        """
+        NEW MODE:
+        Run ONE ICA over a global feature space formed by concatenating ALL layers' final MLP outputs.
+        Returns: component_masks[comp_id][layer_str] = [hidden_channel indices]
+        """
+        logger.info(
+            "Global ICA: capturing final MLP outputs from all layers (post-activation, post down-proj)."
+        )
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        model.eval()
+        device = next(model.parameters()).device
+
+        # dtype for ICA math
+        model_dtype = next(model.parameters()).dtype
+        ica_dtype = self._get_ica_dtype(model_dtype)
+
+        # unwrap PEFT to get base model
+        actual_model: Any = model
+        if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+            actual_model = model.base_model.model
+        elif hasattr(model, "base_model"):
+            actual_model = model.base_model
+
+        blocks, mlps = self._find_decoder_blocks_and_mlps(actual_model)
+        if blocks is None or mlps is None:
+            logger.error("Could not find transformer blocks/MLPs.")
             return {}
 
-        hooks_attached = 0
-        for i, block in enumerate(blocks):
-            # Skip layers not in target_layers if filtering is enabled
-            if target_layers is not None and i not in target_layers:
-                logger.debug(f"Block {i}: Skipping (not in target layers)")
+        num_layers_total = len(blocks)
+        if target_layers is None:
+            target_layers = list(range(num_layers_total))
+        else:
+            target_layers = [i for i in target_layers if 0 <= i < num_layers_total]
+
+        # per-step storage of each layer's MLP output
+        per_step: Dict[int, Dict[int, torch.Tensor]] = defaultdict(dict)
+        last_mask = {"tensor": None}  # attention_mask for pad filtering
+        cur_step = {"id": -1}
+
+        def capture(layer_idx: int):
+            def _hook(_, __, out):
+                # out: [B, T, hidden_size] final MLP output
+                y = out.detach().cpu().to(ica_dtype)
+                if last_mask["tensor"] is not None:
+                    m = last_mask["tensor"].reshape(-1) > 0  # [B*T]
+                    y = y.reshape(-1, y.shape[-1])[m]
+                else:
+                    y = y.reshape(-1, y.shape[-1])
+                per_step[cur_step["id"]][layer_idx] = y  # [time_kept, hidden_size]
+
+            return _hook
+
+        # attach hooks on each target layer's MLP output
+        handles = []
+        for i, mlp in enumerate(mlps):
+            if i not in target_layers or mlp is None:
                 continue
+            base_mlp = getattr(mlp, "base_layer", mlp)
+            handles.append(base_mlp.register_forward_hook(capture(i)))
 
-            # Hook into the base model layers, not LoRA adapters
-            up_proj = None
-            logger.debug(f"Block {i}: Searching for base model linear layers...")
-
-            # For GPT-style models, look for the MLP layers
-            if hasattr(block, "mlp"):
-                mlp = block.mlp
-                # Look for the first linear layer in MLP (usually c_fc for GPT models)
-                if hasattr(mlp, "c_fc"):
-                    # Get the base layer, not the LoRA wrapper
-                    base_layer = mlp.c_fc
-                    if hasattr(base_layer, "base_layer"):
-                        # This is a LoRA-wrapped layer, get the original
-                        up_proj = base_layer.base_layer
-                        logger.debug(f"  Found base layer: c_fc (base_layer)")
-                    else:
-                        # This is the original layer
-                        up_proj = base_layer
-                        logger.debug(f"  Found original layer: c_fc")
-                elif hasattr(mlp, "up_proj"):
-                    # Llama-style models
-                    base_layer = mlp.up_proj
-                    if hasattr(base_layer, "base_layer"):
-                        up_proj = base_layer.base_layer
-                        logger.debug(f"  Found base layer: up_proj (base_layer)")
-                    else:
-                        up_proj = base_layer
-                        logger.debug(f"  Found original layer: up_proj")
-
-            # Fallback: search for any suitable linear layer in the base model
-            if up_proj is None:
-                for n, m in block.named_modules():
-                    # Skip LoRA adapter layers
-                    if "lora" in n.lower() or "adapter" in n.lower():
-                        continue
-
-                    # Check for Linear layers
-                    if isinstance(m, nn.Linear) and m.out_features > m.in_features:
-                        up_proj = m
-                        logger.debug(f"  Found fallback layer '{n}'")
-                        break
-                    # Check for Conv1D layers (used in GPT models)
-                    elif hasattr(m, "weight") and len(m.weight.shape) == 2:
-                        # Conv1D layer - weight shape is [out_features, in_features]
-                        in_feat, out_feat = m.weight.shape[1], m.weight.shape[0]
-                        if out_feat > in_feat:
-                            up_proj = m
-                            logger.debug(f"  Found fallback Conv1D layer '{n}'")
-                            break
-
-            if up_proj is not None:
-                hooks.append(up_proj.register_forward_hook(capture(i)))
-                hooks_attached += 1
-                logger.debug(f"Attached hook to block {i} base layer")
-            else:
-                logger.warning(
-                    f"No suitable base model layer found in block {i}, skipping ICA hook"
-                )
-
-        logger.debug(f"Total hooks attached: {hooks_attached}")
-
-        # 2. feed a few mini-batches
+        # run dataloader to collect signals
         dl = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
         with torch.no_grad():
             for idx, sample in enumerate(itertools.islice(dl, self.sample_batches)):
-                model(
+                cur_step["id"] = idx
+                last_mask["tensor"] = sample["attention_mask"].to(device).detach().cpu()
+                _ = model(
                     input_ids=sample["input_ids"].to(device),
                     attention_mask=sample["attention_mask"].to(device),
                 )
                 if idx and idx % 10 == 0:
                     logger.info(f"  captured {idx}/{self.sample_batches} batches…")
 
-        for h in hooks:
+        for h in handles:
             h.remove()
-        logger.info("Removed activation capture hooks")
+        logger.info("Removed MLP output capture hooks")
 
-        # 3. Run ICA in parallel across layers
-        logger.info(f"Processing activations for {len(activations)} layers...")
-        if self.n_jobs == 1:
-            logger.info("Running ICA sequentially (n_jobs=1)")
-            # Sequential processing for debugging or when parallelization is not desired
-            results = []
-            for layer_idx, acts in activations.items():
-                result = self._process_layer_ica(layer_idx, acts)
-                if result is not None:
-                    results.append(result)
-        else:
-            logger.info(f"Running ICA in parallel with n_jobs={self.n_jobs}")
-            try:
-                # Try parallel processing with specified backend
-                logger.info(f"Using joblib backend: {self.backend}")
-                results = Parallel(n_jobs=self.n_jobs, backend=self.backend, verbose=1)(
-                    delayed(self._process_layer_ica)(layer_idx, acts)
-                    for layer_idx, acts in activations.items()
-                )
-                # Filter out None results
-                results = [r for r in results if r is not None]
-            except Exception as e:
-                logger.warning(
-                    f"Parallel processing with backend '{self.backend}' failed: {e}"
-                )
-                if self.backend != "threading":
-                    logger.info("Trying fallback to threading backend...")
-                    try:
-                        results = Parallel(
-                            n_jobs=self.n_jobs, backend="threading", verbose=1
-                        )(
-                            delayed(self._process_layer_ica)(layer_idx, acts)
-                            for layer_idx, acts in activations.items()
-                        )
-                        results = [r for r in results if r is not None]
-                    except Exception as e2:
-                        logger.warning(f"Threading backend also failed: {e2}")
-                        logger.info("Falling back to sequential processing...")
-                        # Fallback to sequential processing
-                        results = []
-                        for layer_idx, acts in activations.items():
-                            result = self._process_layer_ica(layer_idx, acts)
-                            if result is not None:
-                                results.append(result)
-                else:
-                    logger.info("Falling back to sequential processing...")
-                    # Fallback to sequential processing
-                    results = []
-                    for layer_idx, acts in activations.items():
-                        result = self._process_layer_ica(layer_idx, acts)
-                        if result is not None:
-                            results.append(result)
+        # Identify which layers we actually captured (intersection over steps)
+        captured_layers_sorted = (
+            sorted(set().union(*[d.keys() for d in per_step.values()]))
+            if per_step
+            else []
+        )
+        if not captured_layers_sorted:
+            logger.warning("No MLP outputs were captured.")
+            return {}
 
-        # Convert results to layer_masks dictionary
-        layer_masks = {}
-        for layer_idx, key_neurons in results:
-            layer_masks[str(layer_idx)] = key_neurons
+        # infer hidden_size
+        some_step = next(iter(per_step.values()))
+        some_layer = next(iter(some_step.values()))
+        hidden_size = some_layer.shape[-1]
 
-        total_masked_neurons = sum(len(v) for v in layer_masks.values())
-        if total_masked_neurons == 0:
-            logger.warning(
-                "ICA failed to identify any neurons for masking. Training will proceed without masking."
-            )
-        else:
-            logger.info(
-                f"ICA complete – masking {total_masked_neurons} neurons across {len(layer_masks)} layers."
-            )
+        # build the global design matrix X: [total_time, num_layers * hidden_size]
+        rows = []
+        for sid in sorted(per_step.keys()):
+            layer_to_Y = per_step[sid]
+            # ensure all requested layers are present for this step; skip otherwise
+            if not all(i in layer_to_Y for i in captured_layers_sorted):
+                continue
+            Ys = [
+                layer_to_Y[i] for i in captured_layers_sorted
+            ]  # each [time_kept, hidden_size]
+            tmin = min(y.shape[0] for y in Ys)
+            if tmin == 0:
+                continue
+            Ys = [y[:tmin] for y in Ys]
+            step_mat = torch.cat(Ys, dim=1)  # [tmin, L*hidden_size]
+            rows.append(step_mat)
 
-        # Clean up memory after ICA computation
-        logger.info("Cleaning up ICA computation memory...")
-        del activations
-        # Also clean up any other large variables
-        import gc
+        if not rows:
+            logger.warning("No usable steps after alignment.")
+            return {}
 
-        gc.collect()
+        X = torch.cat(rows, dim=0).numpy()  # [time, L*hidden_size]
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            logger.info("Cleared CUDA cache")
-        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-            logger.info("Cleared MPS cache")
+        # standardize across time
+        X_mean = np.mean(X, axis=0)
+        X_std = np.maximum(np.std(X, axis=0), 1e-8)
+        Xz = (X - X_mean) / X_std
 
-        self.mask_dict = layer_masks
-        return layer_masks
+        k = n_components if n_components is not None else self.num_components
+        logger.info(
+            f"Global ICA: fitting FastICA with n_components={k} on shape {Xz.shape}"
+        )
+        ica = FastICA(n_components=k, random_state=0, max_iter=200, tol=1e-3)
+        _ = ica.fit_transform(Xz)  # time signals (unused downstream)
+        A = ica.mixing_  # [L*hidden_size, k] spatial maps
 
-    def apply_masks(
+        if A is None or np.any(~np.isfinite(A)):
+            logger.warning("FastICA mixing matrix invalid or None.")
+            return {}
+
+        # per-component masks by thresholding |A[:, c]|
+        p = (
+            top_percentile_per_component
+            if top_percentile_per_component is not None
+            else self.percentile
+        )
+        component_masks: Dict[int, Dict[str, List[int]]] = {}
+        for c in range(A.shape[1]):
+            w = np.abs(A[:, c])
+            thr = np.percentile(w, p)
+            idxs = np.flatnonzero(w >= thr)
+            comp_mask: Dict[str, List[int]] = defaultdict(list)
+            for j in idxs:
+                layer_local = j // hidden_size
+                ch = j % hidden_size
+                layer_idx = captured_layers_sorted[layer_local]  # remap local→original
+                comp_mask[str(layer_idx)].append(int(ch))
+            component_masks[c] = {k: sorted(v) for k, v in comp_mask.items()}
+
+        # stash for later application
+        self.mask_dict_components = component_masks
+        self.global_feature_layout = {
+            "captured_layers_sorted": captured_layers_sorted,
+            "hidden_size": hidden_size,
+        }
+
+        total_on = sum(
+            sum(len(v) for v in m.values()) for m in component_masks.values()
+        )
+        logger.info(
+            f"Global ICA complete – built {len(component_masks)} component masks with {total_on} total channel selections."
+        )
+        return component_masks
+
+    def apply_component_masks(
         self,
         model: PreTrainedModel,
-        mask_dict: Optional[Dict[str, List[int]]] = None,
-        mask_mode: str = "key",
+        component_ids: List[int],
+        mode: Literal["lesion", "preserve"] = "lesion",
     ) -> List[Any]:
         """
-        Apply ICA masks to a model by injecting forward pre-hooks.
-
-        Args:
-            model: The transformer model to apply masks to
-            mask_dict: Dictionary mapping layer indices to neuron indices. If None, uses self.mask_dict
-            mask_mode: Masking mode - "key" to mask key neurons, "complement" to mask all but key neurons
-
-        Returns:
-            List of hook handles that can be used to remove the masks later
+        NEW MODE APPLY:
+        Multiply MLP outputs by a per-channel mask. 'lesion' zeros selected channels;
+        'preserve' zeros everything else. Operates at the MLP output (post-activation).
         """
-        if mask_dict is None:
-            if self.mask_dict is None:
-                raise ValueError(
-                    "No mask dictionary provided and none computed. Call compute_masks_for_model first."
-                )
-            mask_dict = self.mask_dict
+        if not self.mask_dict_components:
+            raise ValueError(
+                "No component masks available. Run compute_global_networks first."
+            )
 
-        handles = []
+        # union selected components into layer→channels
+        union: Dict[str, set] = defaultdict(set)
+        for cid in component_ids:
+            comp = self.mask_dict_components.get(cid, {})
+            for layer, chans in comp.items():
+                for ch in chans:
+                    union[layer].add(ch)
+        union = {k: sorted(v) for k, v in union.items()}
+
+        # unwrap PEFT
+        actual_model: Any = model
+        if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+            actual_model = model.base_model.model
+        elif hasattr(model, "base_model"):
+            actual_model = model.base_model
+
+        blocks, mlps = self._find_decoder_blocks_and_mlps(actual_model)
+        if blocks is None or mlps is None:
+            logger.warning(
+                "Could not find transformer blocks/MLPs – no masking applied."
+            )
+            return []
+
         hidden_size = (
             getattr(model.config, "hidden_size", None)
             or getattr(model.config, "n_embd", None)
@@ -705,109 +403,199 @@ class ICAMask:
             or model.get_input_embeddings().embedding_dim
         )
 
-        # Locate decoder blocks (works for GPT-like and Llama-like layouts)
-        # Handle PEFT models by accessing the base model
-        actual_model: Any = model
-        if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
-            # PEFT model: access the underlying model
-            actual_model = model.base_model.model
-        elif hasattr(model, "base_model"):
-            # PEFT model with different structure
-            actual_model = model.base_model
+        handles: List[Any] = []
+        for i, mlp in enumerate(mlps):
+            if mlp is None:
+                continue
+            chans = union.get(str(i), [])
+            if not chans:
+                continue
 
-        if hasattr(actual_model, "transformer"):
-            blocks = getattr(actual_model.transformer, "h", None) or getattr(
-                actual_model.transformer, "blocks", None
-            )
-        elif hasattr(actual_model, "model"):
-            blocks = getattr(actual_model.model, "layers", None) or getattr(
-                actual_model.model, "decoder", None
-            )
-        else:
-            blocks = None
-        if blocks is None:
-            logger.warning("Could not find transformer blocks – no masking applied.")
-            return handles
+            with torch.no_grad():
+                if mode == "lesion":
+                    mask = torch.ones(hidden_size, dtype=torch.float32)
+                    mask[chans] = 0.0
+                else:  # preserve
+                    mask = torch.zeros(hidden_size, dtype=torch.float32)
+                    mask[chans] = 1.0
+                mask.requires_grad_(False)
 
-        for layer_idx, block in enumerate(blocks):
-            for name, module in block.named_modules():
-                # pick the *second* Linear in the MLP (in_features > hidden_size)
-                # For PEFT models, we need to apply hooks to the base layer, not the PEFT wrapper
-                target_module = module
+            def fwd_hook(mod, inp, out, mask_tensor=mask):
+                m = mask_tensor.to(device=out.device, dtype=out.dtype)  # [hidden_size]
+                return out * m  # out: [B, T, hidden_size]
 
-                # Identify linear or equivalent modules by type and shape
-                if isinstance(module, torch.nn.Linear):
-                    in_features, out_features = module.in_features, module.out_features
-                elif (
-                    module.__class__.__name__ == "Linear8bitLt"
-                ):  # bitsandbytes 8-bit quantized linear
-                    in_features, out_features = module.in_features, module.out_features
-                elif module.__class__.__name__ == "Linear4bit":  # bitsandbytes 4-bit
-                    in_features, out_features = module.in_features, module.out_features
-                elif hasattr(module, "base_layer"):
-                    # PEFT wrapped layer (e.g., LoRA) - use the base layer for hooks
-                    base_layer = module.base_layer
-                    target_module = (
-                        base_layer  # Apply hook to base layer, not PEFT wrapper
-                    )
-                    if hasattr(base_layer, "in_features"):
-                        # Standard Linear layer
-                        in_features, out_features = (
-                            base_layer.in_features,
-                            base_layer.out_features,
-                        )
-                    elif hasattr(base_layer, "nf") and hasattr(base_layer, "nx"):
-                        # Conv1D layer (used in GPT models) - nf is out_features, nx is in_features
-                        in_features, out_features = base_layer.nx, base_layer.nf
-                    else:
-                        continue
-                elif hasattr(module, "nf") and hasattr(module, "nx"):
-                    # Direct Conv1D layer
-                    in_features, out_features = module.nx, module.nf
-                else:
-                    continue
-                if out_features == hidden_size and in_features > out_features:
-                    neuron_ids = mask_dict.get(str(layer_idx), [])
-
-                    # Create mask completely outside gradient computation
-                    with torch.no_grad():
-                        if mask_mode == "key":  # zero the key neurons
-                            mask = torch.ones(in_features, dtype=torch.float32)
-                            mask[neuron_ids] = 0.0
-                        else:  # zero everything *except* key neurons
-                            mask = torch.zeros(in_features, dtype=torch.float32)
-                            mask[neuron_ids] = 1.0
-                        # Ensure mask requires no gradients
-                        mask.requires_grad_(False)
-
-                    def pre_hook(mod, inp, mask_tensor=mask):
-                        # Handle both tuple and single tensor inputs
-                        if isinstance(inp, tuple):
-                            x = inp[0]
-                            # Create mask on correct device and ensure it doesn't require gradients
-                            mask_device = mask_tensor.to(device=x.device, dtype=x.dtype)
-                            mask_device.requires_grad_(False)
-                            # Apply mask by element-wise multiplication, preserving gradient flow for unmasked elements
-                            masked_x = x * mask_device
-                            return (masked_x,) + inp[1:]
-                        else:
-                            # Single tensor input
-                            mask_device = mask_tensor.to(
-                                device=inp.device, dtype=inp.dtype
-                            )
-                            mask_device.requires_grad_(False)
-                            return inp * mask_device
-
-                    # Apply hook to the target module (base layer for PEFT, original module otherwise)
-                    handles.append(target_module.register_forward_pre_hook(pre_hook))
-                    break  # stop after first matching linear in this block
+            base_mlp = getattr(mlp, "base_layer", mlp)
+            handles.append(base_mlp.register_forward_hook(fwd_hook))
 
         self.mask_handles = handles
         return handles
 
-    def remove_masks(self) -> None:
-        """Remove all applied masks by removing the forward hooks."""
-        for handle in self.mask_handles:
-            handle.remove()
-        self.mask_handles = []
-        logger.info("Removed all ICA mask hooks")
+    # =================== TEMPLATE UTILITIES (global-ICA only) ===================
+
+    def build_templates_from_current_components(
+        self, name: str = "default"
+    ) -> Dict[str, Any]:
+        """
+        Freeze current global component masks as 'templates'.
+        Returns a dict with layout metadata and per-component supports.
+        """
+        if not getattr(self, "mask_dict_components", None) or not getattr(
+            self, "global_feature_layout", None
+        ):
+            raise ValueError(
+                "No global components/layout available. Run compute_global_networks() first."
+            )
+
+        templates = {
+            "name": name,
+            "layout": {
+                "captured_layers_sorted": list(
+                    self.global_feature_layout["captured_layers_sorted"]
+                ),
+                "hidden_size": int(self.global_feature_layout["hidden_size"]),
+            },
+            # copy to avoid accidental mutation
+            "templates": {
+                int(cid): {str(ly): list(map(int, chs)) for ly, chs in comp.items()}
+                for cid, comp in self.mask_dict_components.items()
+            },
+        }
+        # keep in-memory reference for convenience
+        self.component_templates = templates
+        return templates
+
+    def save_templates(
+        self, path: str, templates: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Save template dictionary (as produced by build_templates_from_current_components) to JSON.
+        """
+        if templates is None:
+            templates = getattr(self, "component_templates", None)
+        if templates is None:
+            raise ValueError(
+                "No templates to save. Call build_templates_from_current_components() first."
+            )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(templates, f, indent=2)
+
+    def load_templates(self, path: str) -> Dict[str, Any]:
+        """
+        Load previously saved templates JSON and keep them on self.component_templates.
+        """
+        with open(path, "r") as f:
+            templates = json.load(f)
+        # normalize keys
+        templates["templates"] = {
+            int(k): {str(ly): list(map(int, v2)) for ly, v2 in v.items()}
+            for k, v in templates["templates"].items()
+        }
+        self.component_templates = templates
+        return templates
+
+    @staticmethod
+    def _flatten_support(
+        comp_map: Dict[str, List[int]],
+        captured_layers_sorted: List[int],
+        hidden_size: int,
+    ) -> np.ndarray:
+        """
+        Convert a per-layer channel index map into a flat boolean vector of length L*hidden_size.
+        """
+        layer_to_local = {int(ly): i for i, ly in enumerate(captured_layers_sorted)}
+        flat = np.zeros(len(captured_layers_sorted) * hidden_size, dtype=bool)
+        for ly_str, chans in comp_map.items():
+            ly = int(ly_str)
+            if ly not in layer_to_local:
+                continue
+            offset = layer_to_local[ly] * hidden_size
+            for ch in chans:
+                idx = offset + int(ch)
+                if 0 <= idx < flat.size:
+                    flat[idx] = True
+        return flat
+
+    @staticmethod
+    def _iou_bool(a: np.ndarray, b: np.ndarray) -> float:
+        """
+        IoU between two boolean support vectors.
+        """
+        inter = np.logical_and(a, b).sum()
+        union = np.logical_or(a, b).sum()
+        return float(inter) / float(union) if union > 0 else 0.0
+
+    def match_components_to_templates(
+        self,
+        candidate_components: Optional[Dict[int, Dict[str, List[int]]]] = None,
+        templates: Optional[Dict[str, Any]] = None,
+        iou_threshold: float = 0.2,
+        top_k: int = 1,
+    ) -> Dict[int, List[Tuple[int, float]]]:
+        """
+        For each candidate component, compute IoU with each template.
+        Return mapping: cand_id -> [(template_id, iou), ...] filtered by iou_threshold, sorted desc, up to top_k.
+
+        Notes:
+        - Set top_k=None to return all matches above threshold.
+        - This is many-to-one by default (multiple candidates can match the same template).
+        """
+        # defaults
+        if candidate_components is None:
+            if not getattr(self, "mask_dict_components", None):
+                raise ValueError(
+                    "No candidate components. Provide candidate_components or run compute_global_networks()."
+                )
+            candidate_components = self.mask_dict_components
+
+        if templates is None:
+            templates = getattr(self, "component_templates", None)
+        if templates is None:
+            # fall back to using current components as 'templates' (useful for A/B matches)
+            if not getattr(self, "mask_dict_components", None) or not getattr(
+                self, "global_feature_layout", None
+            ):
+                raise ValueError(
+                    "No templates and no current components; cannot match."
+                )
+            templates = self.build_templates_from_current_components(name="auto")
+
+        # unpack layout
+        cap_layers = list(templates["layout"]["captured_layers_sorted"])
+        hidden_size = int(templates["layout"]["hidden_size"])
+
+        # pre-flatten templates
+        flat_templates = {
+            int(tid): self._flatten_support(tcomp, cap_layers, hidden_size)
+            for tid, tcomp in templates["templates"].items()
+        }
+
+        # match
+        results: Dict[int, List[Tuple[int, float]]] = {}
+        for cid, cmap in candidate_components.items():
+            cand_flat = self._flatten_support(cmap, cap_layers, hidden_size)
+            pairs = []
+            for tid, tflat in flat_templates.items():
+                iou = self._iou_bool(cand_flat, tflat)
+                if iou >= iou_threshold:
+                    pairs.append((tid, float(iou)))
+            pairs.sort(key=lambda x: x[1], reverse=True)
+            if top_k is not None:
+                pairs = pairs[:top_k]
+            results[int(cid)] = pairs
+        return results
+
+    def count_matches_by_template(
+        self,
+        match_result: Dict[int, List[Tuple[int, float]]],
+    ) -> Dict[int, int]:
+        """
+        Reduce match_result to counts per template id (uses only the top match per candidate if available).
+        """
+        counts: Dict[int, int] = {}
+        for cid, lst in match_result.items():
+            if not lst:
+                continue
+            top_tid = int(lst[0][0])
+            counts[top_tid] = counts.get(top_tid, 0) + 1
+        return counts

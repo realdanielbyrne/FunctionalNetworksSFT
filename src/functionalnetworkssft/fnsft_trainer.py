@@ -508,17 +508,9 @@ def load_model_and_tokenizer(
             device_map = "auto"
             logger.info("CUDA operations verified - using automatic device mapping")
         except RuntimeError as e:
-            if "no kernel image is available" in str(e):
-                logger.warning(
-                    "CUDA kernel compatibility issue detected - using manual device placement"
-                )
-                logger.warning(
-                    "This may occur with newer GPUs. Training will continue but may be slower."
-                )
-            else:
-                logger.warning(
-                    f"CUDA test failed: {e} - falling back to manual device placement"
-                )
+            logger.warning(
+                f"CUDA test failed: {e} - falling back to manual device placement"
+            )
 
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
@@ -537,7 +529,6 @@ def load_model_and_tokenizer(
         except RuntimeError as e:
             if device.type == "cuda":
                 logger.warning(f"Failed to move model to CUDA: {e}")
-                logger.warning("Falling back to CPU")
                 device = torch.device("cpu")
                 model = model.to(device)
             else:
@@ -577,11 +568,6 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
 
     if use_peft:
         logger.info("Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
-        logger.info("Benefits:")
-        logger.info("   • Significantly reduced memory usage")
-        logger.info("   • Faster training and inference")
-        logger.info("   • Smaller model artifacts (adapters only)")
-        logger.info("   • Reduced risk of catastrophic forgetting")
         logger.info("Adapter Configuration:")
         if hasattr(model, "peft_config") and model.peft_config:
             logger.info(f"   • PEFT adapters configured and active")
@@ -589,18 +575,7 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
             logger.info(f"   • No PEFT configuration detected")
     else:
         logger.info("Training Mode: Full Parameter Fine-Tuning")
-        logger.info("Resource Requirements:")
-        logger.info("   • High memory usage (all parameters trainable)")
-        logger.info("   • Longer training time")
-        logger.info("   • Large model artifacts (full model)")
-        logger.info("   • Higher risk of catastrophic forgetting")
-        logger.info("Recommendations:")
-        logger.info("   • Ensure sufficient GPU memory")
-        logger.info("   • Consider gradient checkpointing")
-        logger.info("   • Use lower learning rates")
-        logger.info("   • Monitor for overfitting")
 
-    # Log memory information if available
     if torch.cuda.is_available():
         try:
             memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
@@ -989,7 +964,6 @@ def main(log_file=None):
         default=None,
         help="Hugging Face authentication token (or set HF_TOKEN env var)",
     )
-
     parser.add_argument(
         "--push_adapter_only",
         action="store_true",
@@ -1002,19 +976,13 @@ def main(log_file=None):
         type=str,
         choices=["key", "complement"],
         default=None,
-        help="When 'key' is selected, it should ablate (disable) the ICA-identified key neurons. When 'complement' is selected, it should keep only the key neurons active. When omitted, normal training should proceed without masking.",
-    )
-    parser.add_argument(
-        "--ica_mask_path",
-        type=str,
-        default=None,
-        help="A string argument defaulting to None that specifies the file path to a JSON file containing a dictionary mapping layer indices to lists of neuron indices (format: {layer-idx: [neuron-idx,…]}) as produced by an offline ICA analysis run.",
+        help="Masking polarity. In per-layer mode: 'key' zeros ICA-selected FFN neurons; 'complement' keeps only those. In global mode: 'key' == 'lesion' selected ICA components (zero their channels), 'complement' == 'preserve' only the selected components.",
     )
     parser.add_argument(
         "--ica_components",
         type=int,
-        default=20,
-        help="An integer argument defaulting to 20 that specifies the number of independent components to extract when ICA needs to be performed on-the-fly during training.",
+        default=10,
+        help="An integer argument that specifies the number of independent components to extract when ICA needs to be performed on-the-fly during training.",
     )
     parser.add_argument(
         "--ica_percentile",
@@ -1023,30 +991,10 @@ def main(log_file=None):
         help="Percentile threshold (0-100). For selection_mode 'max_abs' and 'l2', selects neurons with scores >= this percentile. For 'topk', selects the top (100 - percentile)% of neurons by score.",
     )
     parser.add_argument(
-        "--ica_selection_mode",
-        type=str,
-        choices=["max_abs", "l2", "topk"],
-        default="max_abs",
-        help="How to score/select neurons from the ICA mixing matrix: 'max_abs' (default), 'l2', or 'topk'.",
-    )
-    parser.add_argument(
         "--ica_mask_layers",
         type=str,
         default=None,
         help="Specify which transformer layers should have ICA masking applied. Supports single layers ('0'), multiple layers ('0,3,7'), ranges ('0:4,5:6,9:'), and mixed formats ('0,2:5,8'). If not provided, ICA masking is applied to all layers (default behavior).",
-    )
-    parser.add_argument(
-        "--ica_n_jobs",
-        type=int,
-        default=1,
-        help="Number of parallel jobs for ICA computation. -1 uses all available CPU cores, 1 disables parallelization.",
-    )
-    parser.add_argument(
-        "--ica_backend",
-        type=str,
-        default="threading",
-        choices=["threading", "loky", "multiprocessing"],
-        help="Joblib backend for ICA parallelization. 'threading' is most compatible but may be slower for CPU-intensive tasks. 'loky' or 'multiprocessing' may be faster but can have compatibility issues with some libraries.",
     )
     parser.add_argument(
         "--ica_dtype",
@@ -1054,6 +1002,21 @@ def main(log_file=None):
         default=None,
         choices=[None, "auto", "float32", "float16", "bfloat16"],
         help="Data type for ICA computation. None/float32 (default) uses float32 for maximum numerical stability. 'auto' matches model dtype but uses float32 for half-precision models. 'float16'/'bfloat16' use reduced precision for better performance but may affect stability.",
+    )
+
+    # new ICA Global Path arguments
+    parser.add_argument(
+        "--ica_component_ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="For --ica_mode global: list of ICA component ids to target (e.g., 0 1 2). If omitted, defaults to [0].",
+    )
+    parser.add_argument(
+        "--ica_template_path",
+        type=str,
+        default=None,
+        help="Path to global ICA templates JSON (build with build_templates_from_current_components).",
     )
 
     args = parser.parse_args()
@@ -1216,13 +1179,6 @@ def main(log_file=None):
         "PEFT (LoRA/QLoRA)" if lora_args.use_peft else "Full Parameter Fine-Tuning"
     )
     logger.info(f"Training Mode: {training_mode}")
-    if not lora_args.use_peft:
-        logger.warning(
-            "Full parameter fine-tuning requires significantly more memory and compute resources!"
-        )
-        logger.warning(
-            "Consider using PEFT (--use_peft) for better resource efficiency."
-        )
 
     try:
         # Load quantization config
@@ -1285,17 +1241,13 @@ def main(log_file=None):
             mlm=False,
         )
 
-        # ---------- NEW: functional-network masking ----------
         mask_handles = []
         if args.mask_mode is not None:
             # Initialize ICA mask handler
             ica_mask = ICAMask(
                 num_components=args.ica_components,
                 percentile=args.ica_percentile,
-                selection_mode=args.ica_selection_mode,
-                sample_batches=50,
-                n_jobs=args.ica_n_jobs,
-                backend=args.ica_backend,
+                sample_batches=100,
                 ica_dtype=args.ica_dtype,
             )
 
@@ -1310,7 +1262,6 @@ def main(log_file=None):
                 elif hasattr(model, "base_model"):
                     actual_model = model.base_model
 
-                # Count transformer blocks
                 if hasattr(actual_model, "transformer"):
                     blocks = getattr(actual_model.transformer, "h", None) or getattr(
                         actual_model.transformer, "blocks", None
@@ -1346,43 +1297,99 @@ def main(log_file=None):
                         "Unable to parse layer specification: unknown model architecture"
                     )
 
-            if args.ica_mask_path:
-                mask_dict = ica_mask.load_mask(args.ica_mask_path)
+            # ----------------- NEW: branch on ICA mode -----------------
+            logger.info(
+                "Using GLOBAL ICA mode (one ICA over concatenated final MLP outputs)."
+            )
 
-                # Filter mask_dict to only include target layers if specified
-                if target_layers is not None:
-                    mask_dict = ica_mask.filter_mask_by_layers(mask_dict, target_layers)
+            # Load or compute component masks
+            if args.ica_template_path:
+                logger.info(
+                    f"Loading global component masks from {args.ica_template_path}"
+                )
+                with open(args.ica_template_path, "r") as f:
+                    raw = json.load(f)
+                # JSON keys may be strings → coerce back to int
+                component_masks = {
+                    int(k): {str(ly): list(map(int, chs)) for ly, chs in v.items()}
+                    for k, v in raw.items()
+                }
+                ica_mask.mask_dict_components = component_masks
             else:
-                # use *training* split to estimate ICA masks quickly
+                # Use a small subset to estimate components, then build & save TEMPLATES
                 sample_for_ica = torch.utils.data.Subset(
                     train_dataset, range(min(1024, len(train_dataset)))
                 )
-                mask_dict = ica_mask.compute_masks_for_model(
-                    model, sample_for_ica, tokenizer, target_layers
+                component_masks = ica_mask.compute_global_networks(
+                    model=model,
+                    dataset=sample_for_ica,
+                    tokenizer=tokenizer,
+                    target_layers=target_layers,
+                    n_components=args.ica_components,
+                    top_percentile_per_component=args.ica_percentile,
                 )
+                if not component_masks:
+                    logger.warning(
+                        "Global ICA produced no component masks; proceeding without masking."
+                    )
+                else:
+                    # Build & save templates (includes layout metadata for IoU later)
+                    templates = ica_mask.build_templates_from_current_components(
+                        name="groupwise_v1"
+                    )
+                    template_path = os.path.join(
+                        args.output_dir, "global_templates.json"
+                    )
+                    ica_mask.save_templates(template_path, templates)
+                    logger.info(f"Saved global ICA templates to {template_path}")
 
-                # Save the computed mask to disk for future use and memory conservation
-                if mask_dict:
-                    mask_save_path = os.path.join(args.output_dir, "ica_mask.json")
-                    ica_mask.save_mask(mask_dict, mask_save_path)
+                    # Materialize for immediate use
+                    ica_mask.mask_dict_components = templates["templates"]
+                    ica_mask.global_feature_layout = templates["layout"]
 
-            if mask_dict:
-                # Log unique mask coverage per layer
-                logger.info("ICA Mask Coverage Summary:")
-                for lid, idxs in mask_dict.items():
-                    uniq = len(set(idxs))
-                    logger.info(f"Layer {lid}: {uniq} masked neurons")
+            if getattr(ica_mask, "mask_dict_components", None):
+                # Decide which components to target
+                comp_ids = (
+                    args.ica_component_ids
+                    if args.ica_component_ids is not None
+                    else [0]
+                )
+                existing_ids = sorted(ica_mask.mask_dict_components.keys())
+                bad = [c for c in comp_ids if c not in existing_ids]
+                if bad:
+                    raise ValueError(
+                        f"Requested component ids {bad} not in available {existing_ids}"
+                    )
 
-                mask_handles = ica_mask.apply_masks(
-                    model, mask_dict, mask_mode=args.mask_mode
+                # Map mask_mode → global mode
+                # 'key' in original code = zero selected → 'lesion'
+                # 'complement' in original code = keep only selected → 'preserve'
+                global_mode = "lesion" if args.mask_mode == "key" else "preserve"
+
+                # Log coverage summary
+                logger.info(
+                    "Global ICA Component Coverage Summary (per selected component):"
+                )
+                for cid in comp_ids:
+                    layer_counts = {
+                        lid: len(chs)
+                        for lid, chs in ica_mask.mask_dict_components[cid].items()
+                    }
+                    logger.info(
+                        f"  • comp {cid}: {sum(layer_counts.values())} channels across {len(layer_counts)} layers"
+                    )
+
+                mask_handles = ica_mask.apply_component_masks(
+                    model=model,
+                    component_ids=comp_ids,
+                    mode=global_mode,
                 )
                 logger.info(
-                    f"Applied functional-network masking: mode={args.mask_mode}"
+                    f"Applied GLOBAL component masking: components={comp_ids} mode={global_mode}"
                 )
             else:
-                logger.warning(
-                    "Could not find transformer blocks – no masking applied."
-                )
+                logger.warning("No component masks available – skipping masking.")
+
         # ------------------------------------------------------
 
         # Create trainer
@@ -1441,8 +1448,6 @@ def main(log_file=None):
                 )
             except Exception as e:
                 logger.error(f"Failed to upload to Hub: {e}")
-                # Don't raise here to allow training to complete successfully
-                # even if upload fails
 
         # Log final metrics
         if trainer.state.log_history:

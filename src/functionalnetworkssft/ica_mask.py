@@ -408,6 +408,7 @@ class ICAMask:
             if mlp is None:
                 continue
             chans = union.get(str(i), [])
+            chans = [ch for ch in chans if 0 <= ch < hidden_size]
             if not chans:
                 continue
 

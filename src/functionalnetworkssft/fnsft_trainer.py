@@ -1305,16 +1305,12 @@ def main(log_file=None):
             # Load or compute component masks
             if args.ica_template_path:
                 logger.info(
-                    f"Loading global component masks from {args.ica_template_path}"
+                    f"Loading global ICA templates from {args.ica_template_path}"
                 )
-                with open(args.ica_template_path, "r") as f:
-                    raw = json.load(f)
-                # JSON keys may be strings → coerce back to int
-                component_masks = {
-                    int(k): {str(ly): list(map(int, chs)) for ly, chs in v.items()}
-                    for k, v in raw.items()
-                }
-                ica_mask.mask_dict_components = component_masks
+                templates = ica_mask.load_templates(args.ica_template_path)
+                # Materialize for immediate use
+                ica_mask.mask_dict_components = templates["templates"]
+                ica_mask.global_feature_layout = templates["layout"]
             else:
                 # Use a small subset to estimate components, then build & save TEMPLATES
                 sample_for_ica = torch.utils.data.Subset(

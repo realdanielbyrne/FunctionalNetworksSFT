@@ -60,9 +60,6 @@ class DatasetLoader:
     def load_and_sample_datasets(
         dataset_paths: List[str],
         samples_per_dataset: int,
-        tokenizer,
-        max_seq_length: int = 512,
-        template_format: str = "auto",
     ) -> List[Dict[str, Any]]:
         """
         Load multiple datasets and sample specified number of examples from each.

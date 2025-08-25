@@ -7,21 +7,30 @@ The templates can be used later during training to apply pre-computed functional
 
 Usage:
     python build_ica_templates.py \
-        --ica_build_templates_from dataset1.pkl dataset2.pkl \
-        --model_name_or_path microsoft/DialoGPT-medium
+        --ica_build_templates_from dataset1.json dataset2.csv \
+        --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
+
+    # With Hugging Face datasets:
+    python build_ica_templates.py \
+        --ica_build_templates_from databricks/databricks-dolly-15k tatsu-lab/alpaca \
+        --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
 
     # With optional parameters:
     python build_ica_templates.py \
-        --ica_build_templates_from dataset1.pkl dataset2.pkl \
-        --model_name_or_path microsoft/DialoGPT-medium \
+        --ica_build_templates_from dataset1.json dataset2.jsonl \
+        --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
         --ica_template_samples_per_ds 200 \
         --ica_template_output ./custom/output/ \
         --ica_components 15 \
         --ica_percentile 95.0
 
+Supported Dataset Formats:
+    - Local files: .json, .jsonl, .csv
+    - Hugging Face Hub datasets: any dataset name (e.g., squad, alpaca)
+
 Required Arguments:
-    --ica_build_templates_from: One or more dataset paths
-    --model_name_or_path: Model to use for ICA computation
+    --ica_build_templates_from: One or more dataset paths (local .json/.jsonl/.csv files or HF dataset names)
+    --model_name_or_path: Model to use for ICA computation (local path or HF model name)
 
 Optional Arguments:
     --ica_template_samples_per_ds: Number of samples per dataset (default: 100)
@@ -274,7 +283,7 @@ def main():
         type=str,
         nargs="+",
         required=True,
-        help="One or more dataset paths to build templates from",
+        help="One or more dataset paths to build templates from (supports .json/.jsonl/.csv files or HuggingFace dataset names)",
     )
     parser.add_argument(
         "--model_name_or_path",

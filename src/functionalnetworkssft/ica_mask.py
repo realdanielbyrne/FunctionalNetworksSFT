@@ -42,7 +42,7 @@ class ICAMask:
 
     def __init__(
         self,
-        num_components: int = 20,
+        num_components: int = 10,
         percentile: float = 98.0,
         sample_batches: int = 100,
         ica_dtype: Optional[str] = None,
@@ -153,11 +153,9 @@ class ICAMask:
             if str(layer) in mask_dict
         }
 
-    # ------------------------ NEW: Global group-wise ICA over final MLP outputs ------------------------
-
     def _find_decoder_blocks_and_mlps(
         self, actual_model: Any
-    ) -> Tuple[Optional[List[Any]], Optional[List[nn.Module]]]:
+    ) -> Tuple[Optional[List[Any]], Optional[List[Optional[nn.Module]]]]:
         """Return (blocks, mlp_modules) if found, else (None, None)."""
         if hasattr(actual_model, "transformer"):
             blocks = getattr(actual_model.transformer, "h", None) or getattr(
@@ -186,7 +184,7 @@ class ICAMask:
         self,
         model: PreTrainedModel,
         dataset: Dataset,
-        tokenizer: PreTrainedTokenizerBase,
+        tokenizer: PreTrainedTokenizerBase,  # noqa: ARG002
         target_layers: Optional[List[int]] = None,
         n_components: Optional[int] = None,
         top_percentile_per_component: Optional[float] = None,
@@ -374,13 +372,13 @@ class ICAMask:
             )
 
         # union selected components into layer→channels
-        union: Dict[str, set] = defaultdict(set)
+        union_sets: Dict[str, set] = defaultdict(set)
         for cid in component_ids:
             comp = self.mask_dict_components.get(cid, {})
             for layer, chans in comp.items():
                 for ch in chans:
-                    union[layer].add(ch)
-        union = {k: sorted(v) for k, v in union.items()}
+                    union_sets[layer].add(ch)
+        union = {k: sorted(v) for k, v in union_sets.items()}
 
         # unwrap PEFT
         actual_model: Any = model
@@ -400,8 +398,17 @@ class ICAMask:
             getattr(model.config, "hidden_size", None)
             or getattr(model.config, "n_embd", None)
             or getattr(model.config, "d_model", None)
-            or model.get_input_embeddings().embedding_dim
         )
+        if hidden_size is None:
+            embedding_dim = getattr(model.get_input_embeddings(), "embedding_dim", None)
+            if embedding_dim is not None:
+                hidden_size = int(embedding_dim)
+            else:
+                raise ValueError(
+                    "Could not determine hidden_size from model config or embeddings"
+                )
+        else:
+            hidden_size = int(hidden_size)
 
         handles: List[Any] = []
         for i, mlp in enumerate(mlps):
@@ -414,14 +421,14 @@ class ICAMask:
 
             with torch.no_grad():
                 if mode == "lesion":
-                    mask = torch.ones(hidden_size, dtype=torch.float32)
+                    mask = torch.ones((hidden_size,), dtype=torch.float32)
                     mask[chans] = 0.0
                 else:  # preserve
-                    mask = torch.zeros(hidden_size, dtype=torch.float32)
+                    mask = torch.zeros((hidden_size,), dtype=torch.float32)
                     mask[chans] = 1.0
                 mask.requires_grad_(False)
 
-            def fwd_hook(mod, inp, out, mask_tensor=mask):
+            def fwd_hook(_mod, _inp, out, mask_tensor=mask):
                 m = mask_tensor.to(device=out.device, dtype=out.dtype)  # [hidden_size]
                 return out * m  # out: [B, T, hidden_size]
 
@@ -430,8 +437,6 @@ class ICAMask:
 
         self.mask_handles = handles
         return handles
-
-    # =================== TEMPLATE UTILITIES (global-ICA only) ===================
 
     def build_templates_from_current_components(
         self, name: str = "default"
@@ -446,6 +451,10 @@ class ICAMask:
             raise ValueError(
                 "No global components/layout available. Run compute_global_networks() first."
             )
+
+        # Type assertions after None check
+        assert self.mask_dict_components is not None
+        assert self.global_feature_layout is not None
 
         templates = {
             "name": name,
@@ -549,6 +558,9 @@ class ICAMask:
                 )
             candidate_components = self.mask_dict_components
 
+        # Type assertion after None check
+        assert candidate_components is not None
+
         if templates is None:
             templates = getattr(self, "component_templates", None)
         if templates is None:
@@ -594,7 +606,7 @@ class ICAMask:
         Reduce match_result to counts per template id (uses only the top match per candidate if available).
         """
         counts: Dict[int, int] = {}
-        for cid, lst in match_result.items():
+        for _cid, lst in match_result.items():
             if not lst:
                 continue
             top_tid = int(lst[0][0])

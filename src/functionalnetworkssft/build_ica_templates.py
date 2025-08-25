@@ -7,7 +7,7 @@ The templates can be used later during training to apply pre-computed functional
 
 Usage:
     python build_ica_templates.py \
-        --ica_build_templates_from dataset1.json dataset2.csv \
+        --ica_build_templates_from tatsu-lab/alpaca \
         --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
 
     # With Hugging Face datasets:
@@ -350,10 +350,20 @@ def main():
     if not (0 < args.ica_percentile <= 100):
         parser.error("--ica_percentile must be between 0 and 100")
 
-    # Check dataset paths exist
+    # Check dataset paths exist (only for local files, HF datasets will be validated during loading)
     for dataset_path in args.ica_build_templates_from:
-        if not os.path.exists(dataset_path):
-            parser.error(f"Dataset path does not exist: {dataset_path}")
+        # Only check existence for local file paths, not HuggingFace dataset names
+        if (
+            "/" not in dataset_path
+            or os.path.isabs(dataset_path)
+            or dataset_path.startswith("./")
+            or dataset_path.startswith("../")
+        ):
+            # This looks like a local file path
+            if not os.path.exists(dataset_path):
+                parser.error(f"Local dataset file does not exist: {dataset_path}")
+        # For HuggingFace dataset names (containing "/" but not local paths), skip validation here
+        # They will be validated when load_dataset_from_path() is called
 
     # Ensure output directory is absolute path for clarity
     args.ica_template_output = os.path.abspath(args.ica_template_output)

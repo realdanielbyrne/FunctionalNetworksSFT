@@ -8,19 +8,24 @@ The templates can be used later during training to apply pre-computed functional
 Usage:
     python build_ica_templates.py \
         --ica_build_templates_from dataset1.pkl dataset2.pkl \
-        --ica_template_samples_per_ds 100 \
-        --ica_template_output ./output/templates/ \
+        --model_name_or_path microsoft/DialoGPT-medium
+
+    # With optional parameters:
+    python build_ica_templates.py \
+        --ica_build_templates_from dataset1.pkl dataset2.pkl \
         --model_name_or_path microsoft/DialoGPT-medium \
-        --ica_components 10 \
-        --ica_percentile 98.0
+        --ica_template_samples_per_ds 200 \
+        --ica_template_output ./custom/output/ \
+        --ica_components 15 \
+        --ica_percentile 95.0
 
 Required Arguments:
     --ica_build_templates_from: One or more dataset paths
-    --ica_template_samples_per_ds: Number of samples per dataset
-    --ica_template_output: Output directory for templates
     --model_name_or_path: Model to use for ICA computation
 
 Optional Arguments:
+    --ica_template_samples_per_ds: Number of samples per dataset (default: 100)
+    --ica_template_output: Output directory for templates (default: ./ica_templates/)
     --ica_components: Number of ICA components (default: 10)
     --ica_percentile: Percentile threshold (default: 98.0)
     --ica_dtype: Data type for ICA computation (default: auto)
@@ -33,12 +38,11 @@ import logging
 import os
 import random
 import sys
-from pathlib import Path
 from typing import Any, Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from torch.utils.data import Dataset, Subset
+from torch.utils.data import Subset
 
 # Import from the same package
 from .ica_mask import ICAMask
@@ -139,9 +143,9 @@ def create_instruction_dataset(
 
 def build_ica_templates(
     dataset_paths: List[str],
-    samples_per_dataset: int,
-    output_path: str,
     model_name_or_path: str,
+    samples_per_dataset: int = 100,
+    output_path: str = "./ica_templates/",
     ica_components: int = 10,
     ica_percentile: float = 98.0,
     ica_dtype: str = "auto",
@@ -152,15 +156,15 @@ def build_ica_templates(
     Main function to build ICA templates from multiple datasets.
 
     Args:
-        dataset_paths: List of paths to dataset files
-        samples_per_dataset: Number of samples to extract from each dataset
-        output_path: Output directory for saving templates
-        model_name_or_path: Model to use for ICA computation
-        ica_components: Number of ICA components to extract
-        ica_percentile: Percentile threshold for component selection
-        ica_dtype: Data type for ICA computation
-        max_seq_length: Maximum sequence length for tokenization
-        template_format: Dataset format detection mode
+        dataset_paths: List of paths to dataset files (required)
+        model_name_or_path: Model to use for ICA computation (required)
+        samples_per_dataset: Number of samples to extract from each dataset (default: 100)
+        output_path: Output directory for saving templates (default: "./ica_templates/")
+        ica_components: Number of ICA components to extract (default: 10)
+        ica_percentile: Percentile threshold for component selection (default: 98.0)
+        ica_dtype: Data type for ICA computation (default: "auto")
+        max_seq_length: Maximum sequence length for tokenization (default: 512)
+        template_format: Dataset format detection mode (default: "auto")
     """
 
     logger.info("Starting ICA template building process...")
@@ -187,11 +191,7 @@ def build_ica_templates(
     # Load and combine datasets
     logger.info("Loading and sampling datasets...")
     combined_data = DatasetLoader.load_and_sample_datasets(
-        dataset_paths=dataset_paths,
-        samples_per_dataset=samples_per_dataset,
-        tokenizer=tokenizer,
-        max_seq_length=max_seq_length,
-        template_format=template_format,
+        dataset_paths=dataset_paths, samples_per_dataset=samples_per_dataset
     )
 
     # Create instruction dataset
@@ -277,25 +277,25 @@ def main():
         help="One or more dataset paths to build templates from",
     )
     parser.add_argument(
-        "--ica_template_samples_per_ds",
-        type=int,
-        required=True,
-        help="Number of samples to extract from each dataset",
-    )
-    parser.add_argument(
-        "--ica_template_output",
-        type=str,
-        required=True,
-        help="Output directory for saving the generated templates",
-    )
-    parser.add_argument(
         "--model_name_or_path",
         type=str,
         required=True,
         help="Model name or path to use for ICA computation",
     )
 
-    # Optional arguments
+    # Optional arguments with reasonable defaults
+    parser.add_argument(
+        "--ica_template_samples_per_ds",
+        type=int,
+        default=100,
+        help="Number of samples to extract from each dataset (default: 100)",
+    )
+    parser.add_argument(
+        "--ica_template_output",
+        type=str,
+        default="./ica_templates/",
+        help="Output directory for saving the generated templates (default: ./ica_templates/)",
+    )
     parser.add_argument(
         "--ica_components",
         type=int,
@@ -346,6 +346,9 @@ def main():
         if not os.path.exists(dataset_path):
             parser.error(f"Dataset path does not exist: {dataset_path}")
 
+    # Ensure output directory is absolute path for clarity
+    args.ica_template_output = os.path.abspath(args.ica_template_output)
+
     # Set random seed for reproducibility
     random.seed(42)
     torch.manual_seed(42)
@@ -353,9 +356,9 @@ def main():
     try:
         build_ica_templates(
             dataset_paths=args.ica_build_templates_from,
+            model_name_or_path=args.model_name_or_path,
             samples_per_dataset=args.ica_template_samples_per_ds,
             output_path=args.ica_template_output,
-            model_name_or_path=args.model_name_or_path,
             ica_components=args.ica_components,
             ica_percentile=args.ica_percentile,
             ica_dtype=args.ica_dtype,

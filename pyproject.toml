@@ -53,7 +53,7 @@ dependencies = [
 [project.scripts]
 fnsft = "functionalnetworkssft.fnsft_trainer:main"
 check-hf-token = "functionalnetworkssft.utils.hf_utilities:main"
-build-ica-templates = "functionalnetworkssft.build_ica_templates:main"
+buildtemplates = "functionalnetworkssft.build_ica_templates:main"
 
 [project.optional-dependencies]
 

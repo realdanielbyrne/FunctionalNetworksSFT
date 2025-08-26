@@ -25,32 +25,59 @@ This will install all required dependencies and make the `build-ica-templates` c
 
 ## Usage
 
-### Basic Command
+The script supports both positional and named arguments for maximum flexibility.
+
+### Quick Start (Positional Arguments - Recommended)
 
 ```bash
-build-ica-templates \
-    --ica_build_templates_from dataset1.csv dataset2.json \
+# Basic usage with positional arguments
+python -m functionalnetworkssft.build_ica_templates \
+    microsoft/DialoGPT-medium \
+    dataset1.csv dataset2.json
+
+# With optional parameters
+python -m functionalnetworkssft.build_ica_templates \
+    microsoft/DialoGPT-medium \
+    dataset1.csv dataset2.json \
     --ica_template_samples_per_ds 100 \
-    --ica_template_output ./output/templates/ \
-    --model_name_or_path microsoft/DialoGPT-medium
+    --ica_template_output ./output/templates/
 ```
 
-### Alternative: Direct Python Module
+### Alternative: Named Arguments
 
 ```bash
 python -m functionalnetworkssft.build_ica_templates \
+    --model_name_or_path microsoft/DialoGPT-medium \
     --ica_build_templates_from dataset1.csv dataset2.json \
     --ica_template_samples_per_ds 100 \
-    --ica_template_output ./output/templates/ \
-    --model_name_or_path microsoft/DialoGPT-medium
+    --ica_template_output ./output/templates/
+```
+
+### Mixed Usage
+
+```bash
+# Positional model + named datasets
+python -m functionalnetworkssft.build_ica_templates \
+    microsoft/DialoGPT-medium \
+    --ica_build_templates_from dataset1.csv dataset2.json
+
+# Named model + positional datasets
+python -m functionalnetworkssft.build_ica_templates \
+    --model_name_or_path microsoft/DialoGPT-medium \
+    dataset1.csv dataset2.json
 ```
 
 ### Required Arguments
 
-- `--ica_build_templates_from`: One or more dataset paths to build templates from
-- `--ica_template_samples_per_ds`: Number of samples to extract from each dataset
-- `--ica_template_output`: Output directory for saving the generated templates
+**Positional Format:**
+
+- `model` (first argument): Model name or path to use for ICA computation
+- `datasets` (remaining arguments): One or more dataset paths to build templates from
+
+**Named Format:**
+
 - `--model_name_or_path`: Model name or path to use for ICA computation
+- `--ica_build_templates_from`: One or more dataset paths to build templates from
 
 ### Optional Arguments
 
@@ -63,11 +90,24 @@ python -m functionalnetworkssft.build_ica_templates \
 ### Example with All Options
 
 ```bash
-build-ica-templates \
+# Using positional arguments (recommended)
+python -m functionalnetworkssft.build_ica_templates \
+    microsoft/DialoGPT-small \
+    science_qa.csv general_qa.json \
+    --ica_template_samples_per_ds 50 \
+    --ica_template_output ./templates/ \
+    --ica_components 5 \
+    --ica_percentile 95.0 \
+    --ica_dtype float32 \
+    --max_seq_length 256 \
+    --template_format auto
+
+# Using named arguments (alternative)
+python -m functionalnetworkssft.build_ica_templates \
+    --model_name_or_path microsoft/DialoGPT-small \
     --ica_build_templates_from science_qa.csv general_qa.json \
     --ica_template_samples_per_ds 50 \
     --ica_template_output ./templates/ \
-    --model_name_or_path microsoft/DialoGPT-small \
     --ica_components 5 \
     --ica_percentile 95.0 \
     --ica_dtype float32 \
@@ -144,13 +184,13 @@ Example output structure:
 Once generated, use the templates in training with:
 
 ```bash
-python -m functionalnetworkssft.fnsft_trainer \
+poetry run fnsft \
     --model_name_or_path microsoft/DialoGPT-medium \
     --dataset_name_or_path your_training_data.json \
     --output_dir ./output \
-    --mask_mode key \
-    --ica_template_path ./templates/global_templates.json \
-    --ica_component_ids 0 1 2
+    --ica_mask_path ./templates/global_templates.json \
+    --ica_mask_mode key \
+    --ica_mask_component 0
 ```
 
 ## Testing

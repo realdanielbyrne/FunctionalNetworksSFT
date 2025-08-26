@@ -407,6 +407,122 @@ This command will:
 ✅ Successfully accessed the gated model!
 ```
 
+## ICA Template Building
+
+FunctionalNetworksSFT includes a dedicated tool for building ICA templates from datasets without requiring model training. These templates can be used later during training to apply pre-computed functional network masks.
+
+### Building ICA Templates
+
+The `build_ica_templates.py` script supports both positional and named arguments for maximum flexibility:
+
+#### Quick Start (Positional Arguments)
+
+```bash
+# Basic usage with positional arguments (recommended)
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    tatsu-lab/alpaca
+
+# Multiple datasets
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    databricks/databricks-dolly-15k \
+    tatsu-lab/alpaca
+
+# With optional parameters
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    dataset1.json dataset2.jsonl \
+    --ica_template_samples_per_ds 200 \
+    --ica_template_output ./custom/output/ \
+    --ica_components 15 \
+    --ica_percentile 95.0
+```
+
+#### Alternative Syntax (Named Arguments)
+
+```bash
+# Using named arguments (also supported)
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --ica_build_templates_from tatsu-lab/alpaca
+
+# Mixed usage (positional model + named datasets)
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    --ica_build_templates_from tatsu-lab/alpaca databricks/databricks-dolly-15k
+```
+
+### Supported Dataset Formats
+
+The ICA template builder supports multiple dataset formats:
+
+- **Local files**: `.json`, `.jsonl`, `.csv`
+- **Hugging Face Hub datasets**: Any dataset name (e.g., `squad`, `alpaca`)
+
+### Configuration Options
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `model` (positional) | Model name or path for ICA computation | Required |
+| `datasets` (positional) | One or more dataset paths | Required |
+| `--ica_template_samples_per_ds` | Number of samples per dataset | 100 |
+| `--ica_template_output` | Output directory for templates | `./ica_templates/` |
+| `--ica_components` | Number of ICA components | 10 |
+| `--ica_percentile` | Percentile threshold | 98.0 |
+| `--ica_dtype` | Data type for computation | `auto` |
+| `--max_seq_length` | Maximum sequence length | 512 |
+| `--template_format` | Dataset format detection | `auto` |
+
+### Example: Building Templates for Code Tasks
+
+```bash
+# Build ICA templates for code-related fine-tuning
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    microsoft/DialoGPT-medium \
+    code_dataset.json logic_dataset.jsonl \
+    --ica_template_samples_per_ds 500 \
+    --ica_components 20 \
+    --ica_percentile 95.0 \
+    --ica_template_output ./code_ica_templates/
+```
+
+### Using Pre-computed Templates
+
+Once built, ICA templates can be used during training:
+
+```bash
+poetry run fnsft \
+    --model_name_or_path microsoft/DialoGPT-medium \
+    --dataset_name_or_path your_dataset.json \
+    --output_dir ./output \
+    --ica_mask_path ./ica_templates/global_templates.json \
+    --ica_mask_mode key \
+    --ica_mask_component 0
+```
+
+### Template Output
+
+The script generates:
+
+- **Template file**: `global_templates.json` containing component masks
+- **Component coverage summary**: Detailed breakdown of channels per layer
+- **Logging output**: Progress and configuration details
+
+**Example output:**
+
+```
+✅ Template building completed successfully!
+✅ Templates saved to: ./ica_templates/global_templates.json
+✅ Number of components: 10
+
+Component Coverage Summary:
+  • Component 0: 656 channels across 12 layers
+  • Component 1: 1024 channels across 8 layers
+  • Component 2: 512 channels across 15 layers
+  ...
+```
+
 ## Platform Support
 
 The package provides optimized installations for different hardware configurations:

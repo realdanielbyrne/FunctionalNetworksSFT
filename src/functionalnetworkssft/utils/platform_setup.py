@@ -89,7 +89,7 @@ def get_recommended_torch_index_url() -> Optional[str]:
 
     if platform_info["is_windows"] or platform_info["is_linux"]:
         # For CUDA support on Windows/Linux
-        return "https://download.pytorch.org/whl/cu121"
+        return "https://download.pytorch.org/whl/cu128"
     elif platform_info["is_apple_silicon"]:
         # Apple Silicon uses default PyPI (includes MPS support)
         return None
@@ -110,7 +110,8 @@ def get_recommended_installation_command() -> str:
     if platform_info["is_apple_silicon"]:
         return "poetry install --extras apple-silicon"
     elif check_cuda_availability():
-        return "poetry install --extras cuda"
+        # Ensure CUDA wheels are installed first via scripts/setup_cuda.py
+        return "poetry run python scripts/setup_cuda.py"
     else:
         # Check if CUDA drivers are available but PyTorch doesn't detect them
         try:
@@ -120,7 +121,7 @@ def get_recommended_installation_command() -> str:
                 logger.info(
                     "This likely means PyTorch was installed without CUDA support"
                 )
-                return "poetry install --extras cuda"
+                return "poetry run python scripts/setup_cuda.py"
         except FileNotFoundError:
             pass
 
@@ -292,7 +293,7 @@ def print_platform_summary():
         if platform_info["is_apple_silicon"]:
             print("  poetry install --extras apple-silicon")
         else:
-            print("  poetry install --extras cuda")
+            print("  poetry run python scripts/setup_cuda.py")
             print("  (Requires NVIDIA GPU and drivers)")
 
     print("=" * 60)

@@ -22,8 +22,7 @@ from functionalnetworkssft.utils.platform_setup import (
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -40,34 +39,52 @@ def check_nvidia_gpu():
 def install_cuda_pytorch():
     """Install PyTorch with CUDA support using Poetry and pip."""
     logger.info("Installing PyTorch with CUDA support...")
-    
+
     try:
         # First, remove existing PyTorch installations to avoid conflicts
         logger.info("Removing existing PyTorch installations...")
-        subprocess.run([
-            "poetry", "run", "pip", "uninstall", 
-            "torch", "torchvision", "torchaudio", "-y"
-        ], check=False)  # Don't fail if packages aren't installed
-        
-        # Install PyTorch with CUDA from the official PyTorch index
-        logger.info("Installing PyTorch with CUDA support...")
-        subprocess.run([
-            "poetry", "run", "pip", "install", 
-            "torch", "torchvision", "torchaudio",
-            "--index-url", "https://download.pytorch.org/whl/cu121"
-        ], check=True)
-        
+        subprocess.run(
+            [
+                "poetry",
+                "run",
+                "pip",
+                "uninstall",
+                "torch",
+                "torchvision",
+                "torchaudio",
+                "-y",
+            ],
+            check=False,
+        )  # Don't fail if packages aren't installed
+
+        # Install PyTorch with CUDA from the official PyTorch index (CUDA 12.8 wheels)
+        logger.info("Installing PyTorch with CUDA support (cu128 wheels)...")
+        subprocess.run(
+            [
+                "poetry",
+                "run",
+                "pip",
+                "install",
+                "torch",
+                "torchvision",
+                "torchaudio",
+                "--index-url",
+                "https://download.pytorch.org/whl/cu128",
+            ],
+            check=True,
+        )
+
         # Install CUDA-specific optional dependencies
         logger.info("Installing CUDA-specific dependencies...")
         try:
-            subprocess.run([
-                "poetry", "install", "--extras", "cuda"
-            ], check=True)
+            subprocess.run(["poetry", "install", "--extras", "cuda"], check=True)
         except subprocess.CalledProcessError:
-            logger.warning("Some CUDA dependencies failed to install (this is normal for flash-attn on Windows)")
-        
+            logger.warning(
+                "Some CUDA dependencies failed to install (this is normal for flash-attn on Windows)"
+            )
+
         return True
-        
+
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to install CUDA PyTorch: {e}")
         return False
@@ -76,13 +93,11 @@ def install_cuda_pytorch():
 def install_cpu_pytorch():
     """Install CPU-only PyTorch using Poetry."""
     logger.info("Installing CPU-only PyTorch...")
-    
+
     try:
-        subprocess.run([
-            "poetry", "install", "--extras", "cpu"
-        ], check=True)
+        subprocess.run(["poetry", "install", "--extras", "cpu"], check=True)
         return True
-        
+
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to install CPU PyTorch: {e}")
         return False
@@ -91,13 +106,11 @@ def install_cpu_pytorch():
 def install_apple_silicon_pytorch():
     """Install PyTorch with MPS support for Apple Silicon."""
     logger.info("Installing PyTorch with MPS support for Apple Silicon...")
-    
+
     try:
-        subprocess.run([
-            "poetry", "install", "--extras", "apple-silicon"
-        ], check=True)
+        subprocess.run(["poetry", "install", "--extras", "apple-silicon"], check=True)
         return True
-        
+
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to install Apple Silicon PyTorch: {e}")
         return False
@@ -108,11 +121,11 @@ def main():
     print("=" * 60)
     print("FUNCTIONALNETWORKSSFT CUDA SETUP")
     print("=" * 60)
-    
+
     # Get platform information
     platform_info = get_platform_info()
     logger.info(f"Platform: {platform_info}")
-    
+
     # Determine the best installation approach
     if platform_info["is_apple_silicon"]:
         logger.info("Detected Apple Silicon - installing MPS-enabled PyTorch")
@@ -123,21 +136,22 @@ def main():
     else:
         logger.info("No GPU detected - installing CPU-only PyTorch")
         success = install_cpu_pytorch()
-    
+
     if not success:
         print("\n❌ Installation failed!")
         return False
-    
+
     # Verify the installation
     print("\n" + "=" * 60)
     print("VERIFYING INSTALLATION")
     print("=" * 60)
-    
+
     verification = verify_installation()
-    
+
     # Test PyTorch CUDA availability
     try:
         import torch
+
         print(f"PyTorch version: {torch.__version__}")
         print(f"CUDA available: {torch.cuda.is_available()}")
         if torch.cuda.is_available():
@@ -151,19 +165,19 @@ def main():
     except ImportError:
         print("❌ PyTorch not available")
         return False
-    
+
     # Print verification results
     print("\nLibrary Status:")
     for key, value in verification.items():
         status = "✓" if value else "✗"
         print(f"  {status} {key.replace('_', ' ').title()}")
-    
+
     print("\n✅ Setup completed successfully!")
     print("\nNext steps:")
     print("1. Run the CUDA configuration test:")
     print("   python tests/test_cuda_configuration.py")
     print("2. Start training with GPU acceleration")
-    
+
     return True
 
 

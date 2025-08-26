@@ -46,7 +46,7 @@ This installs the core dependencies that work across all platforms.
 ```bash
 # Install PyTorch with CUDA support
 poetry run pip uninstall torch torchvision torchaudio -y
-poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Install CUDA-specific dependencies
 poetry install --extras cuda

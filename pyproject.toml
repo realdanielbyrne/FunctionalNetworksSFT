@@ -10,13 +10,13 @@ requires-python = ">=3.12"
 dependencies = [
     # Core ML frameworks with cross-platform support
     # Note: PyTorch should be installed with platform-specific CUDA/CPU versions
-    # Use: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 (for CUDA)
+    # Use: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 (for CUDA 12.8 wheels)
     # Or: pip install torch torchvision torchaudio (for CPU/MPS on Apple Silicon)
 
-    "torch>=2.4.0,<3.0.0",  # PyTorch with MPS support for Apple Silicon and CUDA support (including nightly builds for RTX 5090)
-    #"torchvision>=0.19.0",  # Vision utilities (optional for most LM tasks)
-    #"torchaudio>=2.4.0",    # Audio utilities (optional for most LM tasks)
-    
+    # NOTE: Do NOT declare torch here.
+    # PyTorch (CUDA/MPS/CPU) is installed via scripts/setup_cuda.py or
+    # by selecting an appropriate extra (cuda, apple-silicon, cpu).
+
     # Hugging Face ecosystem
     "transformers>=4.40.0,<5.0.0",  # Core transformers library
     "datasets>=2.18.0",             # Dataset loading and processing
@@ -65,46 +65,21 @@ dev = [
     "seaborn>=0.12.0",             # Statistical plotting
 ]
 
-# All optional dependencies for CUDA systems
-all-cuda = [
-    # PyTorch with CUDA (install from pytorch-cuda source)
-    "torch>=2.4.0,<2.8.0",
-    "torchvision>=0.19.0",
-    "torchaudio>=2.4.0",
-    # CUDA-specific optimizations
+# Platform-specific extras (no torch/torchvision/torchaudio here)
+# CUDA systems: install CUDA wheels via scripts/setup_cuda.py first
+cuda = [
     "bitsandbytes>=0.43.0",
     "flash-attn>=2.5.0",
-    # Dev dependencies
-    "jupyter>=1.0.0",
-    "ipywidgets>=8.0.0",
-    "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
 ]
 
-# All optional dependencies for Apple Silicon
-all-apple = [
-    # PyTorch with MPS
-    "torch>=2.4.0,<2.8.0",
-    "torchvision>=0.19.0",
-    "torchaudio>=2.4.0",
-    # Dev dependencies
-    "jupyter>=1.0.0",
-    "ipywidgets>=8.0.0",
-    "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
+# Apple Silicon: install PyTorch from PyPI (includes MPS support)
+apple-silicon = [
+    "torch>=2.4.0,<3.0.0",
 ]
 
-# All optional dependencies for CPU-only systems
-all-cpu = [
-    # PyTorch CPU-only
-    "torch>=2.4.0,<2.8.0",
-    "torchvision>=0.19.0",
-    "torchaudio>=2.4.0",
-    # Dev dependencies
-    "jupyter>=1.0.0",
-    "ipywidgets>=8.0.0",
-    "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
+# CPU-only: install CPU wheel from PyPI
+cpu = [
+    "torch>=2.4.0,<3.0.0",
 ]
 
 [tool.poetry]

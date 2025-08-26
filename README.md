@@ -69,6 +69,10 @@ poetry run python scripts/setup_cuda.py
 
 ```bash
 # Steps 1-2 same as above, then:
+# Install CUDA wheels explicitly (prevents CPU fallback)
+poetry run pip uninstall -y torch torchvision torchaudio
+poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Then install CUDA extras
 poetry install --extras cuda
 ```
 

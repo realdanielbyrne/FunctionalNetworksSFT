@@ -6,31 +6,39 @@ This script builds ICA templates from multiple datasets without requiring model 
 The templates can be used later during training to apply pre-computed functional network masks.
 
 Usage:
-    python build_ica_templates.py \
-        --ica_build_templates_from tatsu-lab/alpaca \
-        --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
+    # Using positional arguments (recommended):
+    python build_ica_templates.py meta-llama/Llama-3.2-1B-Instruct tatsu-lab/alpaca
 
-    # With Hugging Face datasets:
-    python build_ica_templates.py \
-        --ica_build_templates_from databricks/databricks-dolly-15k tatsu-lab/alpaca \
-        --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
+    # With multiple datasets:
+    python build_ica_templates.py meta-llama/Llama-3.2-1B-Instruct databricks/databricks-dolly-15k tatsu-lab/alpaca
 
     # With optional parameters:
-    python build_ica_templates.py \
-        --ica_build_templates_from dataset1.json dataset2.jsonl \
-        --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    python build_ica_templates.py meta-llama/Llama-3.2-1B-Instruct dataset1.json dataset2.jsonl \
         --ica_template_samples_per_ds 200 \
         --ica_template_output ./custom/output/ \
         --ica_components 15 \
         --ica_percentile 95.0
 
+    # Using named arguments (also supported):
+    python build_ica_templates.py \
+        --ica_build_templates_from tatsu-lab/alpaca \
+        --model_name_or_path meta-llama/Llama-3.2-1B-Instruct
+
+    # Mixed usage (positional + named optional parameters):
+    python build_ica_templates.py meta-llama/Llama-3.2-1B-Instruct tatsu-lab/alpaca \
+        --ica_template_samples_per_ds 200
+
 Supported Dataset Formats:
     - Local files: .json, .jsonl, .csv
     - Hugging Face Hub datasets: any dataset name (e.g., squad, alpaca)
 
-Required Arguments:
-    --ica_build_templates_from: One or more dataset paths (local .json/.jsonl/.csv files or HF dataset names)
-    --model_name_or_path: Model to use for ICA computation (local path or HF model name)
+Required Arguments (can be positional or named):
+    model: Model to use for ICA computation (local path or HF model name) - FIRST positional argument
+    datasets: One or more dataset paths (local .json/.jsonl/.csv files or HF dataset names) - remaining positional arguments
+
+    Named argument equivalents:
+    --model_name_or_path: Same as model (alternative syntax)
+    --ica_build_templates_from: Same as datasets (alternative syntax)
 
 Optional Arguments:
     --ica_template_samples_per_ds: Number of samples per dataset (default: 100)
@@ -277,19 +285,31 @@ def main():
         epilog=__doc__,
     )
 
-    # Required arguments
+    # Positional arguments (optional parameter names)
+    parser.add_argument(
+        "model",
+        type=str,
+        nargs="?",
+        help="Model name or path to use for ICA computation (first positional argument)",
+    )
+    parser.add_argument(
+        "datasets",
+        type=str,
+        nargs="*",
+        help="One or more dataset paths to build templates from (remaining positional arguments)",
+    )
+
+    # Named arguments (alternative syntax)
     parser.add_argument(
         "--ica_build_templates_from",
         type=str,
         nargs="+",
-        required=True,
-        help="One or more dataset paths to build templates from (supports .json/.jsonl/.csv files or HuggingFace dataset names)",
+        help="One or more dataset paths to build templates from (alternative to positional datasets)",
     )
     parser.add_argument(
         "--model_name_or_path",
         type=str,
-        required=True,
-        help="Model name or path to use for ICA computation",
+        help="Model name or path to use for ICA computation (alternative to positional model)",
     )
 
     # Optional arguments with reasonable defaults
@@ -340,6 +360,40 @@ def main():
 
     args = parser.parse_args()
 
+    # Handle positional vs named arguments
+    dataset_paths = None
+    model_name_or_path = None
+
+    # Check if positional arguments were provided
+    if args.model and args.datasets:
+        # Using positional arguments
+        if len(args.datasets) == 0:
+            parser.error("At least one dataset path is required")
+        # First positional argument is the model, rest are datasets
+        model_name_or_path = args.model
+        dataset_paths = args.datasets
+    elif args.ica_build_templates_from and args.model_name_or_path:
+        # Using named arguments
+        dataset_paths = args.ica_build_templates_from
+        model_name_or_path = args.model_name_or_path
+    elif args.model and args.ica_build_templates_from:
+        # Mixed: positional model, named datasets
+        model_name_or_path = args.model
+        dataset_paths = args.ica_build_templates_from
+    elif args.datasets and args.model_name_or_path:
+        # Mixed: positional datasets, named model
+        dataset_paths = args.datasets
+        model_name_or_path = args.model_name_or_path
+    else:
+        # Neither complete set provided
+        parser.error(
+            "Required arguments missing. Provide either:\n"
+            "  1. Positional: <model> <datasets...>\n"
+            "  2. Named: --model_name_or_path <model> --ica_build_templates_from <datasets...>\n"
+            "  3. Mixed: <model> --ica_build_templates_from <datasets...>\n"
+            "  4. Mixed: --model_name_or_path <model> <datasets...>"
+        )
+
     # Validate arguments
     if args.ica_template_samples_per_ds <= 0:
         parser.error("--ica_template_samples_per_ds must be positive")
@@ -351,7 +405,7 @@ def main():
         parser.error("--ica_percentile must be between 0 and 100")
 
     # Check dataset paths exist (only for local files, HF datasets will be validated during loading)
-    for dataset_path in args.ica_build_templates_from:
+    for dataset_path in dataset_paths:
         # Only check existence for local file paths, not HuggingFace dataset names
         if (
             "/" not in dataset_path
@@ -374,8 +428,8 @@ def main():
 
     try:
         build_ica_templates(
-            dataset_paths=args.ica_build_templates_from,
-            model_name_or_path=args.model_name_or_path,
+            dataset_paths=dataset_paths,
+            model_name_or_path=model_name_or_path,
             samples_per_dataset=args.ica_template_samples_per_ds,
             output_path=args.ica_template_output,
             ica_components=args.ica_components,

@@ -115,16 +115,16 @@ def run_ica_template_building(csv_path, json_path, output_dir):
     )
 
     cmd = [
-        "build-ica-templates",
-        "--ica_build_templates_from",
+        "python",
+        "-m",
+        "functionalnetworkssft.build_ica_templates",
+        "microsoft/DialoGPT-small",  # Model as first positional argument
         csv_path,
         json_path,
         "--ica_template_samples_per_ds",
         "20",
         "--ica_template_output",
         output_dir,
-        "--model_name_or_path",
-        "microsoft/DialoGPT-small",  # Use small model for demo
         "--ica_components",
         "5",
         "--ica_percentile",

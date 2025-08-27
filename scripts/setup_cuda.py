@@ -74,14 +74,24 @@ def install_cuda_pytorch():
             check=True,
         )
 
-        # Install CUDA-specific optional dependencies
-        logger.info("Installing CUDA-specific dependencies...")
+        # Install CUDA-specific optional dependencies without letting Poetry manage torch
+        logger.info(
+            "Installing CUDA-specific dependencies via pip (to avoid torch downgrades)..."
+        )
         try:
-            subprocess.run(["poetry", "install", "--extras", "cuda"], check=True)
-        except subprocess.CalledProcessError:
-            logger.warning(
-                "Some CUDA dependencies failed to install (this is normal for flash-attn on Windows)"
+            subprocess.run(
+                ["poetry", "run", "pip", "install", "bitsandbytes>=0.43.0"], check=True
             )
+        except subprocess.CalledProcessError:
+            logger.warning("bitsandbytes installation failed")
+
+        # Flash-Attn is often unsupported on Windows; try but ignore failures
+        try:
+            subprocess.run(
+                ["poetry", "run", "pip", "install", "flash-attn>=2.5.0"], check=True
+            )
+        except subprocess.CalledProcessError:
+            logger.warning("flash-attn installation failed (often expected on Windows)")
 
         return True
 

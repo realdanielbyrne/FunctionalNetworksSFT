@@ -54,7 +54,9 @@ import argparse
 import logging
 import os
 import random
+import re
 import sys
+from pathlib import Path
 from typing import Any, Dict, List
 
 import torch
@@ -66,12 +68,47 @@ from .ica_mask import ICAMask
 from .utils.model_utils import load_dataset_from_path
 from .fnsft_trainer import InstructionDataset
 from .utils.dataset_utils import DatasetFormatter
+from .utils.config_defaults import ConfigDefaults
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+# Helpers for organized output structure
+INVALID_FS_CHARS_PATTERN = r"[\\/:*?\"<>|]"
+
+
+def sanitize_for_fs(name: str) -> str:
+    """Sanitize a string for safe filesystem usage by replacing invalid characters.
+
+    Replaces characters: / \\ : * ? " < > | with underscores, collapses repeats,
+    and strips whitespace.
+    """
+    if not isinstance(name, str):
+        name = str(name)
+    # Replace invalid characters with underscore
+    safe = re.sub(INVALID_FS_CHARS_PATTERN, "_", name)
+    # Replace whitespace runs with single underscore
+    safe = re.sub(r"\s+", "_", safe)
+    # Collapse multiple underscores
+    safe = re.sub(r"_+", "_", safe)
+    # Trim leading/trailing underscores
+    safe = safe.strip("._-")
+    return safe or "unnamed"
+
+
+def dataset_display_name(dataset_path: str) -> str:
+    """Derive a human-friendly dataset name from a path or HF dataset ID."""
+    try:
+        if os.path.exists(dataset_path):
+            return Path(dataset_path).stem
+        # Not a local path; use as-is (e.g., tatsu-lab/alpaca)
+        return dataset_path
+    except Exception:
+        return dataset_path
 
 
 class DatasetLoader:
@@ -255,11 +292,23 @@ def build_ica_templates(
         name="global_templates_v1"
     )
 
-    # Save templates
-    os.makedirs(output_path, exist_ok=True)
-    template_file_path = os.path.join(output_path, "global_templates.json")
+    # Save templates using organized directory structure: {base}/{model}/{dataset}/
+    model_base = ConfigDefaults.extract_model_base_name(model_name_or_path)
+    model_dir = sanitize_for_fs(model_base)
 
-    logger.info(f"Saving templates to: {template_file_path}")
+    # Derive dataset label (support multiple datasets)
+    ds_names = [dataset_display_name(p) for p in dataset_paths]
+    ds_label_raw = ds_names[0] if len(ds_names) == 1 else "__".join(ds_names)
+    dataset_dir = sanitize_for_fs(ds_label_raw)
+
+    template_dir = os.path.join(output_path, model_dir, dataset_dir)
+    os.makedirs(template_dir, exist_ok=True)
+    template_file_path = os.path.join(template_dir, "global_templates.json")
+
+    logger.info(
+        f"Saving templates to organized path: base='{output_path}', model='{model_dir}', dataset='{dataset_dir}'"
+    )
+    logger.info(f"Full template path: {template_file_path}")
     ica_mask.save_templates(template_file_path, templates)
 
     # Log summary

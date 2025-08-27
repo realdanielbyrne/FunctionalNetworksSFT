@@ -19,7 +19,7 @@ model_name_or_path: "meta-llama/Llama-3.2-1B-Instruct"
 torch_dtype: "auto"  # Use platform-optimized dtype
 
 # Dataset configuration
-dataset_name_or_path: "Amod/mental_health_counseling_conversations"
+dataset_name_or_path: "databricks/databricks-dolly-15k"
 #dataset_name_or_path: "datasets/sarcasm.csv"
 validation_split: 0.1  # 10% for validation
 
@@ -79,7 +79,7 @@ convert_to_gguf: false
 
 # ICA masking (ENABLED for Experiment B) - THE ONLY DIFFERENCE
 mask_mode: "key"        # Enable ICA masking in "key" mode
-ica_template_path: null    # Compute mask on-the-fly
+ica_template_path: "ica_templates/llama-3.2-1b/databricks_databricks-dolly-15k/global_templates.json"
 ica_components: 10      # Number of ICA components
 ica_percentile: 98.0    # Percentile threshold for neuron selection
 ica_selection_mode: "topk"  # max_abs, l2, or topk

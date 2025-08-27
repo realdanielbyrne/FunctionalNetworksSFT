@@ -63,12 +63,12 @@ gradient_checkpointing: false
 
 # Monitoring
 use_wandb: true
-wandb_project: "Fnsft_PEFT_vs_ICAPEFT"
+wandb_project: "Fnsft_PEFT_vs_PEFT+ICA"
 
 # Hub upload (merged model)
 push_to_hub: true
 hub_repo_id: "Llama-3.2-1B-Instruct"
-hub_commit_message: "Llama-3.2-1B-Instruct PEFT+ICA databricks fine-tuning"
+hub_commit_message: "Llama-3.2-1B-Instruct PEFT+ICA databricks-dolly-15k FT, Lesion Mode[0]"
 hub_private: false
 merge_adapter_with_base: true  # Merge adapter with base model
 upload_merged_model: true      # Upload merged model to Hub instead of adapter
@@ -83,7 +83,7 @@ mask_mode: "lesion"        # Enable ICA masking in 'lesion' mode
 ica_template_path: "ica_templates/llama-3.2-1b/databricks_databricks-dolly-15k/global_templates.json"
 ica_components: 10      # Number of ICA components
 ica_percentile: 98.0    # Percentile threshold for neuron selection
-ica_component_ids: [0, 1, 2, 3, 4]
+ica_component_ids: [0]
 
 # Authentication
 use_auth_token: true    # For gated model access

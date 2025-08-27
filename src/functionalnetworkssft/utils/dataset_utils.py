@@ -31,6 +31,15 @@ class DatasetFormatter:
             ),
             "response": item["output"],
         },
+        # Databricks Dolly format (instruction, context, response)
+        ("instruction", "context", "response"): lambda item: {
+            "instruction": (
+                f"{item['instruction']} Context for reference: {item['context']}"
+                if item.get("context") and str(item.get("context", "")).strip()
+                else item["instruction"]
+            ),
+            "response": item["response"],
+        },
         # System-user-assistant format (e.g., Josephgflowers/Finance-Instruct-500k)
         (
             "assistant",
@@ -108,6 +117,7 @@ class DatasetFormatter:
         # Check for known formats in order of preference
         format_priority = [
             ("instruction", "input", "output"),
+            ("instruction", "context", "response"),  # Databricks Dolly format
             ("instruction", "response"),
             ("instruction", "output"),
             ("assistant", "system", "user"),  # System-user-assistant format

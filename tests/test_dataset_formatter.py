@@ -224,6 +224,78 @@ class TestDatasetFormatter:
         assert converted_item2["instruction"] == expected_instruction2
         assert converted_item2["response"] == "2+2 equals 4."
 
+    def test_detect_databricks_dolly_format(self):
+        """Test detection of Databricks Dolly format (instruction, context, response)."""
+        data = [
+            {
+                "instruction": "What is machine learning?",
+                "context": "Machine learning is a subset of artificial intelligence.",
+                "response": "Machine learning is a method of data analysis that automates analytical model building.",
+            },
+            {
+                "instruction": "Explain photosynthesis",
+                "context": "",
+                "response": "Photosynthesis is the process by which plants convert light energy into chemical energy.",
+            },
+        ]
+
+        detected_format = DatasetFormatter.detect_format(data)
+        assert detected_format == ("instruction", "context", "response")
+
+    def test_convert_databricks_dolly_format_with_context(self):
+        """Test conversion of Databricks Dolly format with non-empty context."""
+        item = {
+            "instruction": "What is machine learning?",
+            "context": "Machine learning is a subset of artificial intelligence.",
+            "response": "Machine learning is a method of data analysis that automates analytical model building.",
+        }
+
+        converted_item = DatasetFormatter.convert_to_standard_format(
+            item, ("instruction", "context", "response")
+        )
+
+        expected_instruction = "What is machine learning? Context for reference: Machine learning is a subset of artificial intelligence."
+        assert converted_item["instruction"] == expected_instruction
+        assert (
+            converted_item["response"]
+            == "Machine learning is a method of data analysis that automates analytical model building."
+        )
+
+    def test_convert_databricks_dolly_format_without_context(self):
+        """Test conversion of Databricks Dolly format with empty context."""
+        item = {
+            "instruction": "Explain photosynthesis",
+            "context": "",
+            "response": "Photosynthesis is the process by which plants convert light energy into chemical energy.",
+        }
+
+        converted_item = DatasetFormatter.convert_to_standard_format(
+            item, ("instruction", "context", "response")
+        )
+
+        # Should use instruction as-is when context is empty
+        assert converted_item["instruction"] == "Explain photosynthesis"
+        assert (
+            converted_item["response"]
+            == "Photosynthesis is the process by which plants convert light energy into chemical energy."
+        )
+
+    def test_convert_databricks_dolly_format_with_null_context(self):
+        """Test conversion of Databricks Dolly format with null context."""
+        item = {
+            "instruction": "What is the capital of France?",
+            "context": None,
+            "response": "The capital of France is Paris.",
+        }
+
+        converted_item = DatasetFormatter.convert_to_standard_format(
+            item, ("instruction", "context", "response")
+        )
+
+        # Should use instruction as-is when context is None
+        assert converted_item["instruction"] == "What is the capital of France?"
+        assert converted_item["response"] == "The capital of France is Paris."
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

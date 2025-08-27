@@ -969,9 +969,9 @@ def main(log_file=None):
     parser.add_argument(
         "--mask_mode",
         type=str,
-        choices=["key", "complement"],
+        choices=["lesion", "preserve", "key", "complement"],
         default=None,
-        help="Masking polarity. In per-layer mode: 'key' zeros ICA-selected FFN neurons; 'complement' keeps only those. In global mode: 'key' == 'lesion' selected ICA components (zero their channels), 'complement' == 'preserve' only the selected components.",
+        help="Masking polarity. Use 'lesion' (zero selected) or 'preserve' (keep selected). Legacy values 'key'/'complement' are still accepted but deprecated.",
     )
     parser.add_argument(
         "--ica_components",
@@ -983,7 +983,7 @@ def main(log_file=None):
         "--ica_percentile",
         type=float,
         default=98.0,
-        help="Percentile threshold (0-100). For selection_mode 'max_abs' and 'l2', selects neurons with scores >= this percentile. For 'topk', selects the top (100 - percentile)% of neurons by score.",
+        help="Percentile threshold (0-100). For selection_mode 'max_abs' and 'l2', selects neurons with scores >= this percentile. For 'topk', selects the top (100 - percentile) percent of neurons by score.",
     )
     parser.add_argument(
         "--ica_mask_layers",
@@ -1352,10 +1352,17 @@ def main(log_file=None):
                         f"Requested component ids {bad} not in available {existing_ids}"
                     )
 
-                # Map mask_mode → global mode
-                # 'key' in original code = zero selected → 'lesion'
-                # 'complement' in original code = keep only selected → 'preserve'
-                global_mode = "lesion" if args.mask_mode == "key" else "preserve"
+                # Map mask_mode to global mode with backward-compat for legacy values
+                _mm = args.mask_mode
+                if _mm in ("lesion", "key"):
+                    global_mode = "lesion"
+                else:
+                    global_mode = "preserve"
+                if _mm in ("key", "complement"):
+                    logger.warning(
+                        "Deprecated mask_mode '%s'. Use 'lesion'/'preserve' instead.",
+                        _mm,
+                    )
 
                 # Log coverage summary
                 logger.info(

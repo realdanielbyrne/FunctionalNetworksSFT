@@ -36,13 +36,13 @@ The ICA mask computation in FunctionalNetworksSFT now supports configurable data
 # Use automatic dtype selection
 python -m functionalnetworkssft.fnsft_trainer \
     --model_name_or_path microsoft/DialoGPT-medium \
-    --mask_mode key \
+    --mask_mode lesion \
     --ica_dtype auto
 
 # Use reduced precision for memory savings
 python -m functionalnetworkssft.fnsft_trainer \
     --model_name_or_path microsoft/DialoGPT-medium \
-    --mask_mode key \
+    --mask_mode lesion \
     --ica_dtype bfloat16
 ```
 
@@ -51,7 +51,7 @@ python -m functionalnetworkssft.fnsft_trainer \
 ```yaml
 # config.yaml
 model_name_or_path: "microsoft/DialoGPT-medium"
-mask_mode: "key"
+mask_mode: "lesion"
 ica_dtype: "auto"  # or "float32", "float16", "bfloat16"
 ```
 
@@ -96,11 +96,13 @@ The `_get_ica_dtype()` method determines the optimal dtype:
 ## Recommendations
 
 ### Production Use
+
 - **Default**: Use `ica_dtype=None` (float32) for maximum stability
 - **Memory-constrained**: Use `ica_dtype="auto"` for automatic optimization
 - **Large models**: Consider `ica_dtype="bfloat16"` for memory savings
 
 ### Experimental Use
+
 - **Research**: Test `ica_dtype="float16"` with careful validation
 - **Benchmarking**: Use the provided demo script to evaluate performance
 
@@ -116,17 +118,21 @@ The `_get_ica_dtype()` method determines the optimal dtype:
 ## Testing and Validation
 
 ### Performance Demo
+
 Run the included demonstration script:
+
 ```bash
 python examples/ica_dtype_performance_demo.py
 ```
 
 ### Unit Tests
+
 ```bash
 python -m pytest tests/test_ica_dtype_optimization.py -v
 ```
 
 ### Validation Checklist
+
 - [ ] ICA masks are generated successfully
 - [ ] Memory usage is reduced as expected
 - [ ] Training converges normally
@@ -138,16 +144,19 @@ python -m pytest tests/test_ica_dtype_optimization.py -v
 ### Common Issues
 
 **Numerical instability with float16**:
+
 - Switch to `bfloat16` or `auto`
 - Check for extreme activation values
 - Consider enabling `clip_activations=True`
 
 **Memory not reduced as expected**:
+
 - Verify the dtype is being applied correctly
 - Check that model activations are large enough to see difference
 - Monitor peak memory usage during ICA computation
 
 **ICA computation fails**:
+
 - Fall back to default `float32`
 - Check for NaN/Inf values in activations
 - Reduce number of ICA components if needed

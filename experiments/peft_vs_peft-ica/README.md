@@ -25,7 +25,7 @@ Compare the effectiveness of Parameter Efficient Fine-Tuning (PEFT) with and wit
 ### Experiment B: PEFT + ICA Masking
 
 - **Method**: PEFT (LoRA) + ICA masking
-- **ICA Masking**: Enabled (key mode)
+- **ICA Masking**: Enabled (lesion mode)
 - **ICA Components**: 20
 - **ICA Percentile**: 98.0
 - **Location**: `experiment_b_peft_ica/`
@@ -35,7 +35,7 @@ Compare the effectiveness of Parameter Efficient Fine-Tuning (PEFT) with and wit
 The **only** parameter difference between experiments is the ICA masking setting:
 
 - Experiment A: `mask_mode: null` (disabled)
-- Experiment B: `mask_mode: "key"` (enabled)
+- Experiment B: `mask_mode: "lesion"` (enabled)
 
 All other parameters (LoRA settings, training hyperparameters, etc.) are identical.
 
@@ -136,7 +136,7 @@ python experiments/peft_vs_peft-ica/evaluate_models.py --output-dir custom_resul
 
 | Parameter | Experiment A | Experiment B |
 |-----------|--------------|--------------|
-| `mask_mode` | `null` | `"key"` |
+| `mask_mode` | `null` | `"lesion"` |
 | `ica_components` | 20 (unused) | 5 |
 | `ica_percentile` | 98.0 (unused) | 98.0 |
 

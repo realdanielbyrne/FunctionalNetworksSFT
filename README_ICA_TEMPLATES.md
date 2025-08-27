@@ -188,9 +188,9 @@ poetry run fnsft \
     --model_name_or_path microsoft/DialoGPT-medium \
     --dataset_name_or_path your_training_data.json \
     --output_dir ./output \
-    --ica_mask_path ./templates/global_templates.json \
-    --ica_mask_mode key \
-    --ica_mask_component 0
+    --ica_template_path ./templates/global_templates.json \
+    --mask_mode lesion \
+    --ica_component_ids [0]
 ```
 
 ## Testing

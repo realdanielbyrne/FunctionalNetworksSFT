@@ -479,7 +479,7 @@ def convert_to_gguf(
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
         if result.returncode == 0:
-            logger.info(f"✅ Successfully converted to GGUF: {output_path}")
+            logger.info(f"Successfully converted to GGUF: {output_path}")
         else:
             logger.error(f"GGUF conversion failed: {result.stderr}")
             raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)

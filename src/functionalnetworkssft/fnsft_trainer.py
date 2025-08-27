@@ -99,7 +99,6 @@ def load_env_file():
     """Load environment variables from .env file if it exists."""
     env_file = Path(".env")
     if env_file.exists():
-        logger.info(f"Loading environment variables from {env_file}")
         with open(env_file) as f:
             for line in f:
                 line = line.strip()
@@ -108,10 +107,6 @@ def load_env_file():
                     # Remove quotes if present
                     value = value.strip('"').strip("'")
                     os.environ[key] = value
-                    if key == "HF_TOKEN":
-                        logger.info(
-                            f"Loaded HF_TOKEN from .env file: {value[:8]}...{value[-8:]}"
-                        )
     else:
         logger.debug("No .env file found")
 
@@ -528,7 +523,7 @@ def load_model_and_tokenizer(
             logger.info(f"Model moved to {device}")
         except RuntimeError as e:
             if device.type == "cuda":
-                logger.warning(f"Failed to move model to CUDA: {e}")
+                logger.warning(f"!!!! Failed to move model to CUDA: {e}")
                 device = torch.device("cpu")
                 model = model.to(device)
             else:
@@ -570,9 +565,9 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
         logger.info("Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
         logger.info("Adapter Configuration:")
         if hasattr(model, "peft_config") and model.peft_config:
-            logger.info(f"   • PEFT adapters configured and active")
+            logger.info("   - PEFT adapters configured and active")
         else:
-            logger.info(f"   • No PEFT configuration detected")
+            logger.info("   - No PEFT configuration detected")
     else:
         logger.info("Training Mode: Full Parameter Fine-Tuning")
 
@@ -581,8 +576,8 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
             memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
             memory_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
             logger.info(f"GPU Memory Usage:")
-            logger.info(f"   • Allocated: {memory_allocated:.2f} GB")
-            logger.info(f"   • Reserved: {memory_reserved:.2f} GB")
+            logger.info(f"   - Allocated: {memory_allocated:.2f} GB")
+            logger.info(f"   - Reserved: {memory_reserved:.2f} GB")
         except Exception as e:
             logger.debug(f"Could not get GPU memory info: {e}")
 
@@ -1384,7 +1379,7 @@ def main(log_file=None):
                     f"Applied GLOBAL component masking: components={comp_ids} mode={global_mode}"
                 )
             else:
-                logger.warning("No component masks available – skipping masking.")
+                logger.warning("No component masks available - skipping masking.")
 
         # ------------------------------------------------------
 

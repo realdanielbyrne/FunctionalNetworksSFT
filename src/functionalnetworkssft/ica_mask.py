@@ -260,7 +260,7 @@ class ICAMask:
                     attention_mask=sample["attention_mask"].to(device),
                 )
                 if idx and idx % 10 == 0:
-                    logger.info(f"  captured {idx}/{self.sample_batches} batches…")
+                    logger.info(f"  captured {idx}/{self.sample_batches} batches...")
 
         for h in handles:
             h.remove()

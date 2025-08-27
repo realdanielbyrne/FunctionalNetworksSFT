@@ -49,7 +49,7 @@ def run_experiment_a():
     logger.info("Method: PEFT (LoRA) only")
     logger.info("Epochs: 2")
     logger.info("ICA Masking: DISABLED")
-    logger.info("Data Preprocessing: Context ≤ 1500 chars, Response ≤ 4000 chars")
+    logger.info("Data Preprocessing: Context <= 1500 chars, Response <= 4000 chars")
     logger.info("=" * 80)
 
     # Set up the configuration file path (relative to project root)
@@ -71,7 +71,6 @@ def run_experiment_a():
         sys.argv = ["fnsft_trainer.py", "--config", config_path]
 
         logger.info(f"Starting training with config: {config_path}")
-        logger.info("This may take several minutes...")
 
         # Run the training with experiment-specific log file
         log_file_path = "experiments/peft_vs_peft-ica/experiment_a_peft_only/output/experiment_a.log"

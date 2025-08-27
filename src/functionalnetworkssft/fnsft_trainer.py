@@ -964,6 +964,16 @@ def main(log_file=None):
         action="store_true",
         help="Only upload LoRA adapter files to Hub (not the full model)",
     )
+    parser.add_argument(
+        "--merge_adapter_with_base",
+        action="store_true",
+        help="Merge trained LoRA adapter with base model after training completion. Saves both adapter and merged model in separate subdirectories.",
+    )
+    parser.add_argument(
+        "--upload_merged_model",
+        action="store_true",
+        help="When both --merge_adapter_with_base and --push_to_hub are enabled, upload the merged model instead of the adapter to Hub.",
+    )
 
     # Masking and ICA arguments
     parser.add_argument(
@@ -1422,6 +1432,47 @@ def main(log_file=None):
         final_output_dir = os.path.join(args.output_dir, "final_model")
         save_model_and_tokenizer(model, tokenizer, final_output_dir, lora_args.use_peft)
 
+        # Merge adapter with base model if requested
+        if args.merge_adapter_with_base and lora_args.use_peft:
+            logger.info("Merging LoRA adapter with base model...")
+
+            # Create separate directories for adapter and merged model
+            adapter_output_dir = os.path.join(args.output_dir, "adapter")
+            merged_output_dir = os.path.join(args.output_dir, "merged_model")
+
+            # Save adapter separately (copy from final_model to adapter directory)
+            import shutil
+
+            if os.path.exists(adapter_output_dir):
+                shutil.rmtree(adapter_output_dir)
+            shutil.copytree(final_output_dir, adapter_output_dir)
+            logger.info(f"Adapter saved to: {adapter_output_dir}")
+
+            # Import merge function
+            from .utils.model_utils import merge_adapter_with_base_model
+
+            # Merge adapter with base model
+            try:
+                merge_adapter_with_base_model(
+                    adapter_path=final_output_dir,
+                    output_path=merged_output_dir,
+                    base_model_name=model_args.model_name_or_path,
+                )
+                logger.info(f"Merged model saved to: {merged_output_dir}")
+
+                # Also save tokenizer to merged model directory
+                if hasattr(tokenizer, "save_pretrained"):
+                    tokenizer.save_pretrained(merged_output_dir)
+                    logger.info("Tokenizer saved to merged model directory")
+
+            except Exception as e:
+                logger.error(f"Failed to merge adapter with base model: {e}")
+                logger.warning("Continuing with training completion...")
+        elif args.merge_adapter_with_base and not lora_args.use_peft:
+            logger.warning(
+                "--merge_adapter_with_base was specified but PEFT is not enabled. Skipping merge operation."
+            )
+
         # Convert to GGUF if requested
         if args.convert_to_gguf:
             gguf_output_path = os.path.join(args.output_dir, "model.gguf")
@@ -1433,16 +1484,46 @@ def main(log_file=None):
                 logger.error("--hub_repo_id is required when using --push_to_hub")
                 raise ValueError("hub_repo_id must be specified for Hub upload")
 
+            # Determine which model to upload
+            upload_model_path = final_output_dir
+            upload_use_peft = lora_args.use_peft
+            upload_push_adapter_only = args.push_adapter_only
+
+            if (
+                args.upload_merged_model
+                and args.merge_adapter_with_base
+                and lora_args.use_peft
+            ):
+                # Upload the merged model instead of the adapter
+                merged_output_dir = os.path.join(args.output_dir, "merged_model")
+                if os.path.exists(merged_output_dir):
+                    upload_model_path = merged_output_dir
+                    upload_use_peft = False  # Merged model is not a PEFT model
+                    upload_push_adapter_only = False  # Not uploading adapter files
+                    logger.info(f"Uploading merged model from: {merged_output_dir}")
+                else:
+                    logger.warning(
+                        "Merged model directory not found, falling back to adapter upload"
+                    )
+            elif args.upload_merged_model and not args.merge_adapter_with_base:
+                logger.warning(
+                    "--upload_merged_model specified but --merge_adapter_with_base not enabled. Uploading adapter instead."
+                )
+            elif args.upload_merged_model and not lora_args.use_peft:
+                logger.warning(
+                    "--upload_merged_model specified but PEFT not enabled. Uploading full model instead."
+                )
+
             try:
                 upload_to_hub(
-                    model_path=final_output_dir,
+                    model_path=upload_model_path,
                     tokenizer=tokenizer,
                     repo_id=args.hub_repo_id,
                     commit_message=args.hub_commit_message,
                     private=args.hub_private,
                     token=args.hub_token,
-                    push_adapter_only=args.push_adapter_only,
-                    use_peft=lora_args.use_peft,
+                    push_adapter_only=upload_push_adapter_only,
+                    use_peft=upload_use_peft,
                 )
             except Exception as e:
                 logger.error(f"Failed to upload to Hub: {e}")

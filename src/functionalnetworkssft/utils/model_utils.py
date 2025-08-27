@@ -500,6 +500,7 @@ def merge_adapter_with_base_model(
     adapter_path: str, output_path: str, base_model_name: Optional[str] = None
 ) -> None:
     """Merge LoRA adapter with base model to create unified model."""
+    import os
 
     logger.info(f"Loading PEFT model from {adapter_path}")
     model = AutoPeftModelForCausalLM.from_pretrained(adapter_path)
@@ -508,6 +509,8 @@ def merge_adapter_with_base_model(
     merged_model = model.merge_and_unload()
 
     logger.info(f"Saving merged model to {output_path}")
+    # Create output directory if it doesn't exist
+    os.makedirs(output_path, exist_ok=True)
     merged_model.save_pretrained(output_path)
 
     logger.info("Adapter merged successfully")

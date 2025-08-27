@@ -29,7 +29,6 @@ def upload_to_hub(
     commit_message: Optional[str] = None,
     private: bool = False,
     token: Optional[str] = None,
-    push_adapter_only: bool = False,
     use_peft: Optional[bool] = None,
 ) -> None:
     """
@@ -42,7 +41,6 @@ def upload_to_hub(
         commit_message: Optional commit message for the upload
         private: Whether to create a private repository
         token: HuggingFace authentication token
-        push_adapter_only: Whether to upload only LoRA adapter files
         use_peft: Whether the model uses PEFT (auto-detected if None)
 
     Raises:
@@ -109,42 +107,11 @@ def upload_to_hub(
                 repo_id=repo_id, repo_type="model", private=private, exist_ok=True
             )
 
-        # Determine which files to upload based on training mode and push_adapter_only flag
-        files_to_upload = []
-
-        if push_adapter_only or (use_peft and not push_adapter_only):
-            # Upload only LoRA adapter files (either explicitly requested or PEFT mode)
-            adapter_files = [
-                "adapter_config.json",
-                "adapter_model.safetensors",
-                "adapter_model.bin",  # fallback for older format
-            ]
-
-            for file_name in adapter_files:
-                file_path = os.path.join(model_path, file_name)
-                if os.path.exists(file_path):
-                    files_to_upload.append(file_name)
-
-            if not files_to_upload:
-                if use_peft:
-                    raise ValueError(
-                        f"No LoRA adapter files found in {model_path}. Model may not be a PEFT model."
-                    )
-                else:
-                    logger.warning(
-                        f"No LoRA adapter files found in {model_path}, falling back to full model upload"
-                    )
-                    push_adapter_only = False
-
-            if files_to_upload:
-                logger.info(f"Uploading LoRA adapter files: {files_to_upload}")
-
-        if not push_adapter_only:
-            # Upload all model files (full model or full model + adapters)
-            if use_peft:
-                logger.info("Uploading full PEFT model (base model + adapters)")
-            else:
-                logger.info("Uploading full fine-tuned model")
+        # Upload behavior is determined by use_peft parameter
+        if use_peft:
+            logger.info("Uploading PEFT model")
+        else:
+            logger.info("Uploading full fine-tuned model")
 
         # Upload tokenizer first
         logger.info("Uploading tokenizer...")
@@ -157,59 +124,44 @@ def upload_to_hub(
             )
 
         # Upload model files
-        if push_adapter_only:
-            # Upload individual adapter files
-            for file_name in files_to_upload:
-                file_path = os.path.join(model_path, file_name)
-                logger.info(f"Uploading {file_name}...")
-                api.upload_file(
-                    path_or_fileobj=file_path,
-                    path_in_repo=file_name,
+        logger.info("Uploading model files...")
+
+        # Load and upload the model using transformers
+        try:
+            if use_peft:
+                # Upload PEFT model
+                from peft import AutoPeftModelForCausalLM
+
+                logger.info("Uploading PEFT model...")
+                model = AutoPeftModelForCausalLM.from_pretrained(model_path)
+                model.push_to_hub(
                     repo_id=repo_id,
-                    repo_type="model",
-                    commit_message=f"{commit_message} - {file_name}",
-                    token=token,
-                )
-        else:
-            # Upload entire model directory
-            logger.info("Uploading model files...")
-
-            # Load and upload the model using transformers
-            try:
-                # Try to load as PEFT model first
-                from peft import PeftModel, AutoPeftModelForCausalLM
-
-                # Check if this is a PEFT model
-                if os.path.exists(os.path.join(model_path, "adapter_config.json")):
-                    logger.info("Detected PEFT model, uploading with PEFT support...")
-                    model = AutoPeftModelForCausalLM.from_pretrained(model_path)
-                    model.push_to_hub(
-                        repo_id=repo_id,
-                        commit_message=commit_message,
-                        token=token,
-                        private=private,
-                    )
-                else:
-                    # Regular model upload
-                    model = AutoModelForCausalLM.from_pretrained(model_path)
-                    model.push_to_hub(
-                        repo_id=repo_id,
-                        commit_message=commit_message,
-                        token=token,
-                        private=private,
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to upload using transformers: {e}")
-                logger.info("Falling back to file-by-file upload...")
-
-                # Fallback: upload directory contents
-                api.upload_folder(
-                    folder_path=model_path,
-                    repo_id=repo_id,
-                    repo_type="model",
                     commit_message=commit_message,
                     token=token,
+                    private=private,
                 )
+            else:
+                # Upload regular model
+                logger.info("Uploading full model...")
+                model = AutoModelForCausalLM.from_pretrained(model_path)
+                model.push_to_hub(
+                    repo_id=repo_id,
+                    commit_message=commit_message,
+                    token=token,
+                    private=private,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to upload using transformers: {e}")
+            logger.info("Falling back to file-by-file upload...")
+
+            # Fallback: upload directory contents
+            api.upload_folder(
+                folder_path=model_path,
+                repo_id=repo_id,
+                repo_type="model",
+                commit_message=commit_message,
+                token=token,
+            )
 
         logger.info(f"Successfully uploaded model to: https://huggingface.co/{repo_id}")
 

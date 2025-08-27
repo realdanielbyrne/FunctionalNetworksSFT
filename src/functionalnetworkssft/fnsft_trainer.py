@@ -960,11 +960,6 @@ def main(log_file=None):
         help="Hugging Face authentication token (or set HF_TOKEN env var)",
     )
     parser.add_argument(
-        "--push_adapter_only",
-        action="store_true",
-        help="Only upload LoRA adapter files to Hub (not the full model)",
-    )
-    parser.add_argument(
         "--merge_adapter_with_base",
         action="store_true",
         help="Merge trained LoRA adapter with base model after training completion. Saves both adapter and merged model in separate subdirectories.",
@@ -1487,7 +1482,6 @@ def main(log_file=None):
             # Determine which model to upload
             upload_model_path = final_output_dir
             upload_use_peft = lora_args.use_peft
-            upload_push_adapter_only = args.push_adapter_only
 
             if (
                 args.upload_merged_model
@@ -1499,7 +1493,6 @@ def main(log_file=None):
                 if os.path.exists(merged_output_dir):
                     upload_model_path = merged_output_dir
                     upload_use_peft = False  # Merged model is not a PEFT model
-                    upload_push_adapter_only = False  # Not uploading adapter files
                     logger.info(f"Uploading merged model from: {merged_output_dir}")
                 else:
                     logger.warning(
@@ -1522,7 +1515,6 @@ def main(log_file=None):
                     commit_message=args.hub_commit_message,
                     private=args.hub_private,
                     token=args.hub_token,
-                    push_adapter_only=upload_push_adapter_only,
                     use_peft=upload_use_peft,
                 )
             except Exception as e:

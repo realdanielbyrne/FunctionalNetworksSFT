@@ -143,9 +143,16 @@ response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 print(response)
 ```
 
+## Hub Upload Behavior
+
+- **PEFT Models**: When `use_peft=True`, uploads adapter files by default
+- **Merged Models**: When `--upload_merged_model` is specified, uploads the standalone merged model instead
+- **Full Fine-tuning**: When `use_peft=False`, uploads the complete fine-tuned model
+
 ## Notes
 
 - The merge operation happens automatically after training completion
 - If merge fails, training will still complete successfully and the adapter will be saved
 - The original adapter files are preserved in both `final_model/` and `adapter/` directories
 - Merging only works with LoRA adapters, not with full fine-tuning
+- The `--push_adapter_only` parameter has been removed in favor of the more intuitive `--upload_merged_model` control

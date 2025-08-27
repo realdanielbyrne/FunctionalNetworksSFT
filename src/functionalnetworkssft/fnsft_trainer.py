@@ -924,6 +924,12 @@ def main(log_file=None):
         help="Weights & Biases project name",
     )
     parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="Custom Weights & Biases run name",
+    )
+    parser.add_argument(
         "--convert_to_gguf",
         action="store_true",
         help="Convert final model to GGUF format",
@@ -1109,10 +1115,16 @@ def main(log_file=None):
 
     # Initialize Weights & Biases if requested
     if args.use_wandb:
+        # Use custom run name if provided, otherwise use default format
+        run_name = (
+            args.wandb_run_name
+            if args.wandb_run_name
+            else f"sft-{Path(args.model_name_or_path).name}-{Path(args.dataset_name_or_path).name}"
+        )
         wandb.init(
             project=args.wandb_project,
             config=vars(args),
-            name=f"sft-{Path(args.model_name_or_path).name}-{Path(args.dataset_name_or_path).name}",
+            name=run_name,
         )
 
     # Determine device for data loader and enable TF32 on CUDA
@@ -1159,7 +1171,11 @@ def main(log_file=None):
         metric_for_best_model=args.metric_for_best_model,
         greater_is_better=args.greater_is_better,
         report_to="wandb" if args.use_wandb else None,
-        run_name=f"sft-{Path(args.model_name_or_path).name}",
+        run_name=(
+            args.wandb_run_name
+            if args.wandb_run_name
+            else f"sft-{Path(args.model_name_or_path).name}"
+        ),
         remove_unused_columns=False,
         dataloader_pin_memory=pin_memory_flag,
         gradient_checkpointing=args.gradient_checkpointing,

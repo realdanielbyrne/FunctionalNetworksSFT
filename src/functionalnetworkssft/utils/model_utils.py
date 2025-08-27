@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 from transformers.utils.quantization_config import BitsAndBytesConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import AutoPeftModelForCausalLM
 from datasets import load_dataset
 from peft import (
     LoraConfig,
@@ -493,3 +494,20 @@ def convert_to_gguf(
     except Exception as e:
         logger.error(f"Error during GGUF conversion: {e}")
         raise
+
+
+def merge_adapter_with_base_model(
+    adapter_path: str, output_path: str, base_model_name: Optional[str] = None
+) -> None:
+    """Merge LoRA adapter with base model to create unified model."""
+
+    logger.info(f"Loading PEFT model from {adapter_path}")
+    model = AutoPeftModelForCausalLM.from_pretrained(adapter_path)
+
+    logger.info("Merging adapter with base model...")
+    merged_model = model.merge_and_unload()
+
+    logger.info(f"Saving merged model to {output_path}")
+    merged_model.save_pretrained(output_path)
+
+    logger.info("Adapter merged successfully")

@@ -296,6 +296,45 @@ class TestDatasetFormatter:
         assert converted_item["instruction"] == "What is the capital of France?"
         assert converted_item["response"] == "The capital of France is Paris."
 
+    def test_preprocessing_with_combined_instruction_length(self):
+        """Test that preprocessing correctly filters by combined instruction length."""
+        from src.functionalnetworkssft.utils.model_utils import (
+            preprocess_dataset_for_experiments,
+        )
+
+        # Create test data with Databricks Dolly format
+        data = [
+            {
+                "instruction": "Short instruction",
+                "context": "Short context",
+                "response": "Short response",
+            },
+            {
+                "instruction": "This is a very long instruction that exceeds the limit",
+                "context": "This is also a very long context that when combined with the instruction will exceed the maximum allowed length for the combined instruction field",
+                "response": "Response",
+            },
+            {
+                "instruction": "Medium instruction",
+                "context": "",  # Empty context
+                "response": "Medium response",
+            },
+        ]
+
+        # Test with strict limits
+        filtered_data = preprocess_dataset_for_experiments(
+            data,
+            response_max_length=1000,
+            instruction_max_length=100,  # Very strict limit
+        )
+
+        # Should only keep the first item (short instruction + context)
+        # Second item should be filtered out due to combined length
+        # Third item should pass (no context to combine)
+        assert len(filtered_data) == 2
+        assert filtered_data[0]["instruction"] == "Short instruction"
+        assert filtered_data[1]["instruction"] == "Medium instruction"
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

@@ -23,6 +23,10 @@ dataset_name_or_path: "databricks/databricks-dolly-15k"
 #dataset_name_or_path: "datasets/sarcasm.csv"
 validation_split: 0.1  # 10% for validation
 
+# Dataset preprocessing parameters
+response_max_length: 4000     # Maximum response field length
+instruction_max_length: 2048  # Maximum combined instruction length (including context)
+
 # Output configuration
 output_dir: "experiments/peft_vs_peft-ica/experiment_a_peft_only/output"
 

@@ -265,51 +265,96 @@ def setup_lora(
 
 def preprocess_dataset_for_experiments(
     data: List[Dict[str, Any]],
-    context_max_length: int = 1500,
     response_max_length: int = 4000,
+    instruction_max_length: int = 2048,
 ) -> List[Dict[str, Any]]:
     """
-    Preprocess dataset by filtering based on Context and Response field lengths.
+    Preprocess dataset by filtering based on:
+      1) Response length (response_max_length)
+      2) Combined instruction length after format conversion (instruction_max_length)
 
     Args:
         data: List of dataset items
-        context_max_length: Maximum allowed length for Context field (default: 1500)
         response_max_length: Maximum allowed length for Response field (default: 4000)
+        instruction_max_length: Maximum allowed length for combined instruction (default: 2048)
 
     Returns:
         Filtered dataset with items that meet the length criteria
     """
+    from .dataset_utils import DatasetFormatter
+
     original_count = len(data)
     logger.info(f"Starting dataset preprocessing with {original_count} examples")
 
-    # Filter by Context length
-    filtered_data = []
-    context_filtered_count = 0
+    # Detect dataset format for proper instruction length calculation
+    detected_format = None
+    if data:
+        try:
+            detected_format = DatasetFormatter.detect_format(data)
+            logger.info(f"Detected format for preprocessing: {detected_format}")
+        except Exception as e:
+            logger.warning(f"Could not detect format: {e}. Using basic filtering.")
 
-    for item in data:
-        context = item.get("Context", item.get("context", ""))
-        if len(str(context)) <= context_max_length:
-            filtered_data.append(item)
-        else:
-            context_filtered_count += 1
-
-    logger.info(
-        f"Filtered out {context_filtered_count} examples with Context length > {context_max_length} characters"
-    )
-
-    # Filter by Response length
-    final_filtered_data = []
+    # 1) Filter by Response length first
+    response_filtered_data = []
     response_filtered_count = 0
 
-    for item in filtered_data:
+    for item in data:
         response = item.get("Response", item.get("response", ""))
         if len(str(response)) <= response_max_length:
-            final_filtered_data.append(item)
+            response_filtered_data.append(item)
         else:
             response_filtered_count += 1
 
     logger.info(
         f"Filtered out {response_filtered_count} examples with Response length > {response_max_length} characters"
+    )
+
+    # Filter by combined instruction length (after format conversion)
+    final_filtered_data = []
+    instruction_filtered_count = 0
+
+    for item in response_filtered_data:
+        # Calculate the combined instruction length after format conversion
+        combined_instruction_length = 0
+
+        if detected_format:
+            try:
+                # Convert to standard format to get the actual combined instruction
+                converted_item = DatasetFormatter.convert_to_standard_format(
+                    item, detected_format
+                )
+                combined_instruction_length = len(
+                    str(converted_item.get("instruction", ""))
+                )
+            except Exception as e:
+                # Fallback: estimate combined length manually
+                logger.debug(f"Format conversion failed for item, using fallback: {e}")
+                instruction = str(item.get("instruction", item.get("Instruction", "")))
+                context = str(item.get("context", item.get("Context", "")))
+
+                if context.strip():
+                    # Add the " Context for reference: " overhead (25 characters)
+                    combined_instruction_length = len(instruction) + len(context) + 25
+                else:
+                    combined_instruction_length = len(instruction)
+        else:
+            # No format detected, use basic estimation
+            instruction = str(item.get("instruction", item.get("Instruction", "")))
+            context = str(item.get("context", item.get("Context", "")))
+
+            if context.strip():
+                combined_instruction_length = len(instruction) + len(context) + 25
+            else:
+                combined_instruction_length = len(instruction)
+
+        if combined_instruction_length <= instruction_max_length:
+            final_filtered_data.append(item)
+        else:
+            instruction_filtered_count += 1
+
+    logger.info(
+        f"Filtered out {instruction_filtered_count} examples with combined instruction length > {instruction_max_length} characters"
     )
 
     final_count = len(final_filtered_data)
@@ -320,10 +365,10 @@ def preprocess_dataset_for_experiments(
     logger.info("=" * 60)
     logger.info(f"Original dataset size: {original_count} examples")
     logger.info(
-        f"Context length filter (>{context_max_length} chars): -{context_filtered_count} examples"
+        f"Response length filter (>{response_max_length} chars): -{response_filtered_count} examples"
     )
     logger.info(
-        f"Response length filter (>{response_max_length} chars): -{response_filtered_count} examples"
+        f"Combined instruction length filter (>{instruction_max_length} chars): -{instruction_filtered_count} examples"
     )
     logger.info(f"Total filtered out: {total_filtered} examples")
     logger.info(f"Final dataset size: {final_count} examples")

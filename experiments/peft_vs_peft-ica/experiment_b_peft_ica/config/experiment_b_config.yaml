@@ -23,6 +23,10 @@ dataset_name_or_path: "databricks/databricks-dolly-15k"
 #dataset_name_or_path: "datasets/sarcasm.csv"
 validation_split: 0.1  # 10% for validation
 
+# Dataset preprocessing parameters
+response_max_length: 4092     # Maximum response field length
+instruction_max_length: 4092  # Maximum combined instruction length (including context)
+
 # Output configuration
 output_dir: "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output"
 
@@ -36,7 +40,7 @@ lora_target_modules: null  # Auto-detect target modules
 # Training Configuration
 #max_steps: 5 # Uncomment to override num_train_epochs
 num_train_epochs: 2     # Exactly 2 epochs as specified
-per_device_train_batch_size: 2
+per_device_train_batch_size: 5
 per_device_eval_batch_size: 1
 gradient_accumulation_steps: 2
 learning_rate: 0.0005   # Higher learning rate for PEFT

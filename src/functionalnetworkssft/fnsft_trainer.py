@@ -163,6 +163,19 @@ class DataArguments:
         default="auto",
         metadata={"help": "Template format to use: auto, chat, alpaca, chatml, basic"},
     )
+    # Dataset preprocessing parameters
+    response_max_length: int = field(
+        default=4000,
+        metadata={
+            "help": "Maximum allowed length for response field during preprocessing"
+        },
+    )
+    instruction_max_length: int = field(
+        default=2048,
+        metadata={
+            "help": "Maximum allowed length for combined instruction (including context) during preprocessing"
+        },
+    )
 
 
 @dataclass
@@ -767,6 +780,19 @@ def main(log_file=None):
         "chatml (ChatML format), basic (use instruction_template)",
     )
 
+    parser.add_argument(
+        "--response_max_length",
+        type=int,
+        default=4000,
+        help="Maximum allowed length for response field during preprocessing",
+    )
+    parser.add_argument(
+        "--instruction_max_length",
+        type=int,
+        default=2048,
+        help="Maximum allowed length for combined instruction (including context) during preprocessing",
+    )
+
     # Quantization arguments
     parser.add_argument(
         "--use_4bit", action="store_true", help="Use 4-bit quantization"
@@ -1218,7 +1244,11 @@ def main(log_file=None):
         # Apply data preprocessing for experiments (filter by Context and Response lengths)
         from .utils.model_utils import preprocess_dataset_for_experiments
 
-        data = preprocess_dataset_for_experiments(data)
+        data = preprocess_dataset_for_experiments(
+            data,
+            response_max_length=data_args.response_max_length,
+            instruction_max_length=data_args.instruction_max_length,
+        )
 
         train_data, val_data = split_dataset(data, data_args.validation_split)
 

@@ -32,12 +32,12 @@ The script supports both positional and named arguments for maximum flexibility.
 ```bash
 # Basic usage with positional arguments
 python -m functionalnetworkssft.build_ica_templates \
-    microsoft/DialoGPT-medium \
+    meta-llama/Llama-3.2-1B-Instruct \
     dataset1.csv dataset2.json
 
 # With optional parameters
 python -m functionalnetworkssft.build_ica_templates \
-    microsoft/DialoGPT-medium \
+    meta-llama/Llama-3.2-1B-Instruct \
     dataset1.csv dataset2.json \
     --ica_template_samples_per_ds 100 \
     --ica_template_output ./output/templates/
@@ -47,7 +47,7 @@ python -m functionalnetworkssft.build_ica_templates \
 
 ```bash
 python -m functionalnetworkssft.build_ica_templates \
-    --model_name_or_path microsoft/DialoGPT-medium \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
     --ica_build_templates_from dataset1.csv dataset2.json \
     --ica_template_samples_per_ds 100 \
     --ica_template_output ./output/templates/

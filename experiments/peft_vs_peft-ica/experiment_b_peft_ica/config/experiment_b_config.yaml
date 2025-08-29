@@ -24,8 +24,8 @@ dataset_name_or_path: "databricks/databricks-dolly-15k"
 validation_split: 0.1  # 10% for validation
 
 # Dataset preprocessing parameters
-response_max_length: 4092     # Maximum response field length
-instruction_max_length: 4092  # Maximum combined instruction length (including context)
+response_max_length: 3500     # Maximum response field length (aligned with Exp A)
+instruction_max_length: 2800  # Maximum combined instruction length (including context, aligned with Exp A)
 
 # Output configuration
 output_dir: "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output"
@@ -34,13 +34,13 @@ output_dir: "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output"
 # PEFT is enabled by default - no need to set peft: true
 lora_r: 16              # LoRA rank
 lora_alpha: 32          # LoRA alpha scaling
-lora_dropout: 0       # LoRA dropout
+lora_dropout: 0.1       # LoRA dropout (aligned with Exp A)
 lora_target_modules: null  # Auto-detect target modules
 
 # Training Configuration
 #max_steps: 5 # Uncomment to override num_train_epochs
 num_train_epochs: 2     # Exactly 2 epochs as specified
-per_device_train_batch_size: 2
+per_device_train_batch_size: 3
 per_device_eval_batch_size: 1
 gradient_accumulation_steps: 2
 learning_rate: 0.0005   # Higher learning rate for PEFT
@@ -49,7 +49,7 @@ warmup_ratio: 0.03
 lr_scheduler_type: "cosine"
 
 # Sequence and Template Configuration
-max_seq_length: 4096    emory
+max_seq_length: 4096
 template_format: "auto" # Auto-detect chat template
 
 # Evaluation and Logging
@@ -62,8 +62,8 @@ metric_for_best_model: "eval_loss"
 evaluation_strategy: "steps"
 
 # Memory optimization
-#gradient_checkpointing: true
-gradient_checkpointing: false
+gradient_checkpointing: true
+#gradient_checkpointing: false
 
 # Monitoring
 use_wandb: true

@@ -2,9 +2,10 @@
 """
 Fine-Tuning Experiment Runner
 
-This script runs comprehensive fine-tuning experiments comparing two approaches:
+This script runs comprehensive fine-tuning experiments comparing three approaches:
 - Experiment A: PEFT (LoRA) only
-- Experiment B: PEFT (LoRA) + ICA masking
+- Experiment B: PEFT (LoRA) + ICA masking (lesion mode)
+- Experiment C: PEFT (LoRA) + ICA masking (preserve mode)
 
 Both experiments use the meta-llama/Llama-3.2-1B-Instruct model and mental health dataset.
 
@@ -115,7 +116,7 @@ def run_experiment_b():
 
 
 def run_evaluation():
-    """Run model evaluation after both experiments complete."""
+    """Run model evaluation after experiments complete."""
     logger = logging.getLogger(__name__)
     logger.info("Starting model evaluation...")
 
@@ -131,7 +132,7 @@ def run_evaluation():
             "--test-size",
             "0.2",
             "--output-dir",
-            "evaluation_results",
+            "experiments/peft_vs_peft-ica/evaluation_results",
         ]
 
         start_time = time.time()
@@ -155,9 +156,11 @@ def print_experiment_summary():
     # Load configs to get actual values
     config_a_path = "experiments/peft_vs_peft-ica/experiment_a_peft_only/config/experiment_a_config.yaml"
     config_b_path = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml"
+    config_c_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/experiment_c_config.yaml"
 
     config_a = {}
     config_b = {}
+    config_c = {}
 
     # Load config A
     try:
@@ -174,6 +177,14 @@ def print_experiment_summary():
     except (FileNotFoundError, yaml.YAMLError) as e:
         print(f"Warning: Could not load config B ({config_b_path}): {e}")
         print("Using fallback values for Experiment B")
+
+    # Load config C
+    try:
+        with open(config_c_path, "r") as f:
+            config_c = yaml.safe_load(f) or {}
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        print(f"Warning: Could not load config C ({config_c_path}): {e}")
+        print("Using fallback values for Experiment C")
 
     print("=" * 80)
     print("FINE-TUNING EXPERIMENT COMPARISON")
@@ -220,6 +231,30 @@ def print_experiment_summary():
     print(
         f"  - ICA percentile: {config_b.get('ica_percentile', '[CONFIG NOT LOADED]')}"
     )
+
+    print("Experiment C: PEFT (LoRA) + ICA masking (preserve)")
+    print(
+        f"  - LoRA rank: {config_c.get('lora_r', '[CONFIG NOT LOADED]')} (identical to A/B)"
+    )
+    print(
+        f"  - LoRA alpha: {config_c.get('lora_alpha', '[CONFIG NOT LOADED]')} (identical to A/B)"
+    )
+    print(
+        f"  - LoRA dropout: {config_c.get('lora_dropout', '[CONFIG NOT LOADED]')} (identical to A/B)"
+    )
+
+    mask_mode_c = config_c.get("mask_mode", "[CONFIG NOT LOADED]")
+    if mask_mode_c and mask_mode_c != "[CONFIG NOT LOADED]":
+        print(f"  - ICA masking: ENABLED ({mask_mode_c} mode)")
+    else:
+        print(f"  - ICA masking: {mask_mode_c}")
+
+    print(
+        f"  - ICA components: {config_c.get('ica_components', '[CONFIG NOT LOADED]')}"
+    )
+    print(
+        f"  - ICA percentile: {config_c.get('ica_percentile', '[CONFIG NOT LOADED]')}"
+    )
     print("=" * 80)
 
 
@@ -232,9 +267,9 @@ def main():
     )
     parser.add_argument(
         "--experiment",
-        choices=["a", "b", "both"],
-        default="both",
-        help="Which experiment(s) to run (default: both)",
+        choices=["a", "b", "c", "all"],
+        default="all",
+        help="Which experiment(s) to run (default: all)",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
@@ -251,21 +286,45 @@ def main():
     start_time = time.time()
 
     # Run experiments based on selection
-    if args.experiment in ["a", "both"]:
+    if args.experiment in ["a", "all"]:
         logger.info("Running Experiment A...")
         results["experiment_a"] = run_experiment_a()
 
-    if args.experiment in ["b", "both"]:
+    if args.experiment in ["b", "all"]:
         logger.info("Running Experiment B...")
         results["experiment_b"] = run_experiment_b()
 
-    # Run evaluation if both experiments completed successfully
+    if args.experiment in ["c", "all"]:
+        logger.info("Running Experiment C (Preserve)...")
+        # Import and run experiment C
+        try:
+            sys.path.insert(
+                0,
+                str(
+                    Path(__file__).parent / "experiment_c_peft_ica_preserve" / "scripts"
+                ),
+            )
+            from run_experiment_c import run_experiment_c_preserve as run_c
+
+            start_time_c = time.time()
+            success_c = run_c()
+            end_time_c = time.time()
+            logger.info(
+                f"Experiment C completed in {end_time_c - start_time_c:.2f} seconds"
+            )
+            results["experiment_c"] = success_c
+        except Exception as e:
+            logger.error(f"Experiment C failed: {str(e)}")
+            results["experiment_c"] = False
+
+    # Run evaluation if selected set completed successfully
     if (
-        args.experiment == "both"
+        args.experiment == "all"
         and results.get("experiment_a", False)
         and results.get("experiment_b", False)
+        and results.get("experiment_c", False)
     ):
-        logger.info("Both experiments completed successfully. Running evaluation...")
+        logger.info("All experiments completed successfully. Running evaluation...")
         results["evaluation"] = run_evaluation()
 
     # Calculate total time

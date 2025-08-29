@@ -1120,6 +1120,8 @@ def main(log_file=None):
         validation_split=args.validation_split,
         auto_detect_format=args.auto_detect_format,
         template_format=args.template_format,
+        response_max_length=args.response_max_length,
+        instruction_max_length=args.instruction_max_length,
     )
 
     quant_args = QuantizationArguments(

@@ -2,13 +2,11 @@
 """
 Experiment B: PEFT + ICA Masking Fine-Tuning Script
 
-This script runs Experiment B five times sequentially with different ICA component
+This script runs Experiment B three times sequentially with different ICA component
 masking configurations in lesion mask mode:
 - Run 1: [0] (mask only component 0)
 - Run 2: [0, 1] (mask components 0 and 1)
 - Run 3: [0, 1, 2] (mask components 0, 1, and 2)
-- Run 4: [0, 1, 2, 3] (mask components 0, 1, 2, and 3)
-- Run 5: [0, 1, 2, 3, 4] (mask components 0, 1, 2, 3, and 4)
 
 Usage:
     python experiment_b_peft_ica/scripts/run_experiment_b.py
@@ -159,8 +157,6 @@ def run_experiment_b():
         [0],  # Run 1: mask only component 0
         [0, 1],  # Run 2: mask components 0 and 1
         [0, 1, 2],  # Run 3: mask components 0, 1, and 2
-        [0, 1, 2, 3],  # Run 4: mask components 0, 1, 2, and 3
-        [0, 1, 2, 3, 4],  # Run 5: mask components 0, 1, 2, 3, and 4
     ]
 
     # Set up the base configuration file path

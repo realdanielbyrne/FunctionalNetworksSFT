@@ -43,7 +43,7 @@ Required Arguments (can be positional or named):
 Optional Arguments:
     --ica_template_samples_per_ds: Number of samples per dataset (default: 100)
     --ica_template_output: Output directory for templates (default: ./ica_templates/)
-    --ica_components: Number of ICA components (default: 10)
+    --ica_components: Number of ICA components (default: 5)
     --ica_percentile: Percentile threshold (default: 98.0)
     --ica_dtype: Data type for ICA computation (default: auto)
     --max_seq_length: Maximum sequence length (default: 512)
@@ -200,7 +200,7 @@ def build_ica_templates(
     model_name_or_path: str,
     samples_per_dataset: int = 100,
     output_path: str = "./ica_templates/",
-    ica_components: int = 10,
+    ica_components: int = 5,
     ica_percentile: float = 98.0,
     ica_dtype: str = "auto",
     max_seq_length: int = 512,

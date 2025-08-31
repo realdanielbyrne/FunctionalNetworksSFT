@@ -764,14 +764,14 @@ def load_model_and_tokenizer(
     device_map = None
     if device.type in ["cuda", "mps"]:
         try:
-            # Test if CUDA operations work with this GPU
+            # Test if GPU operations work with this device
             test_tensor = torch.randn(10, 10).to(device)
             _ = torch.matmul(test_tensor, test_tensor)
             device_map = "auto"
-            logger.info("CUDA operations verified - using automatic device mapping")
+            logger.info("GPU operations verified - using automatic device mapping")
         except RuntimeError as e:
             logger.warning(
-                f"CUDA test failed: {e} - falling back to manual device placement"
+                f"GPU test failed: {e} - falling back to manual device placement"
             )
 
     # Prepare model loading kwargs
@@ -1468,6 +1468,19 @@ def main(log_file=None):
         f"TF32 cuDNN: {getattr(torch.backends.cudnn, 'allow_tf32', None) if device_for_args.type == 'cuda' else 'N/A'}"
     )
 
+    # Select optimizer based on device and quantization support (avoid CUDA-only on MPS/CPU)
+    optim_name = (
+        "adamw_torch_fused" if device_for_args.type == "cuda" else "adamw_torch"
+    )
+    if args.use_4bit or args.use_8bit:
+        if is_quantization_supported():
+            optim_name = "paged_adamw_8bit"
+        else:
+            logger.warning(
+                "4/8-bit optimization requested but quantization not supported; falling back to adamw_torch"
+            )
+            optim_name = "adamw_torch"
+
     # Set up training arguments
     training_args = TrainingArguments(
         output_dir=args.output_dir,
@@ -1504,11 +1517,7 @@ def main(log_file=None):
         gradient_checkpointing=args.gradient_checkpointing,
         fp16=args.torch_dtype == "float16",
         bf16=args.torch_dtype == "bfloat16",
-        optim=(
-            "paged_adamw_8bit"
-            if (args.use_4bit or args.use_8bit)
-            else "adamw_torch_fused"
-        ),
+        optim=optim_name,
         max_grad_norm=args.max_grad_norm,
         label_names=["labels"],  # Quiet PEFT label warning
     )

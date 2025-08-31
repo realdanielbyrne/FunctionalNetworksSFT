@@ -36,7 +36,7 @@ lora_target_modules: null  # Auto-detect target modules
 # Training Configuration
 #max_steps: 5 # Uncomment to override num_train_epochs
 num_train_epochs: 2     # Exactly 2 epochs as specified
-per_device_train_batch_size: 3
+per_device_train_batch_size: 2
 per_device_eval_batch_size: 1
 gradient_accumulation_steps: 2
 learning_rate: 0.0005   # Higher learning rate for PEFT
@@ -49,17 +49,17 @@ max_seq_length: 4096
 template_format: "auto" # Auto-detect chat template
 
 # Evaluation and Logging
-logging_steps: 10
-save_steps: 500
-eval_steps: 500
-save_total_limit: 2
+logging_steps: 100
+save_steps: 3000
+eval_steps: 3000
+save_total_limit: 1
 load_best_model_at_end: true
 metric_for_best_model: "eval_loss"
 evaluation_strategy: "steps"
 
 # Memory optimization
-gradient_checkpointing: true
-#gradient_checkpointing: false
+#gradient_checkpointing: true
+gradient_checkpointing: false
 
 # Monitoring
 use_wandb: true
@@ -88,3 +88,4 @@ ica_component_ids: [0]
 # Authentication
 use_auth_token: true    # For gated model access
 
+attn_implementation: "sdpa"

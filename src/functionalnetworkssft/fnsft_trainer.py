@@ -42,7 +42,6 @@ import transformers
 from transformers.utils.quantization_config import BitsAndBytesConfig
 from transformers.training_args import TrainingArguments
 from transformers.trainer import Trainer
-from transformers.data.data_collator import DataCollatorForLanguageModeling
 from transformers.trainer_callback import EarlyStoppingCallback
 from transformers import (
     AutoTokenizer,
@@ -50,7 +49,7 @@ from transformers import (
 )
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.modeling_utils import PreTrainedModel
-from datasets import load_dataset
+from datasets import load_dataset, Dataset as HFDataset, load_from_disk
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
 import wandb
 from tqdm.auto import tqdm
@@ -131,6 +130,12 @@ class ModelArguments:
         default="auto",
         metadata={
             "help": "Torch dtype for model loading (auto, float16, bfloat16, float32)"
+        },
+    )
+    attn_implementation: str = field(
+        default="auto",
+        metadata={
+            "help": "Attention kernel implementation to request (auto, eager, sdpa, flash_attention_2)."
         },
     )
 
@@ -249,12 +254,14 @@ class InstructionDataset(Dataset):
         max_length: int = 2048,
         instruction_template: str = "### Instruction:\n{instruction}\n\n### Response:\n{response}",
         auto_detect_format: bool = True,
+        is_pretokenized: bool = False,
         template_format: str = "auto",
         detected_format: Optional[tuple] = None,
     ):
         self.data = data
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.is_pretokenized = is_pretokenized
         self.instruction_template = instruction_template
         self.auto_detect_format = auto_detect_format
         self.template_format = template_format
@@ -327,6 +334,16 @@ class InstructionDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.data[idx]
 
+        # If pre-tokenized, return the tokenized data directly
+        if self.is_pretokenized:
+            return {
+                "input_ids": torch.tensor(item["input_ids"], dtype=torch.long),
+                "attention_mask": torch.tensor(
+                    item["attention_mask"], dtype=torch.long
+                ),
+                "labels": torch.tensor(item["labels"], dtype=torch.long),
+            }
+
         # Convert to standard format if auto-detection is enabled
         if self.auto_detect_format and self.detected_format:
             try:
@@ -369,16 +386,16 @@ class InstructionDataset(Dataset):
             text = self._format_text(instruction, response)
         # If text is already set from above, use it as-is
 
-        # Tokenize
+        # Tokenize with dynamic padding (collator will pad to batch max length)
         encoding = self.tokenizer.__call__(
             text,
             truncation=True,
-            padding="max_length",
+            padding=False,  # dynamic padding handled by data collator
             max_length=self.max_length,
             return_tensors="pt",
         )
-        input_ids = encoding["input_ids"].squeeze()
-        attention_mask = encoding["attention_mask"].squeeze()
+        input_ids = encoding["input_ids"].squeeze(0)
+        attention_mask = encoding["attention_mask"].squeeze(0)
 
         # Create labels with padding tokens set to -100 to ignore them in loss calculation
         labels = input_ids.clone()
@@ -422,6 +439,243 @@ class InstructionDataset(Dataset):
             )
         else:
             raise ValueError(f"Unknown template format: {self.actual_template_format}")
+
+
+class DataCollatorForCausalLMWithPadding:
+    """Pad batch dynamically and set labels to -100 on padded positions for causal LM."""
+
+    def __init__(
+        self, tokenizer: PreTrainedTokenizerBase, pad_to_multiple_of: Optional[int] = 8
+    ):
+        self.tokenizer = tokenizer
+        self.pad_to_multiple_of = pad_to_multiple_of
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        # Build features without labels for tokenizer.pad (it doesn't know how to pad 'labels')
+        feats = []
+        for f in features:
+            feats.append(
+                {
+                    "input_ids": (
+                        f["input_ids"].tolist()
+                        if isinstance(f["input_ids"], torch.Tensor)
+                        else f["input_ids"]
+                    ),
+                    "attention_mask": (
+                        f["attention_mask"].tolist()
+                        if isinstance(f["attention_mask"], torch.Tensor)
+                        else f["attention_mask"]
+                    ),
+                }
+            )
+
+        # Pad input_ids and attention_mask
+        # Suppress the fast tokenizer warning since we're intentionally using pad() for dynamic batching
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*using the `__call__` method is faster.*"
+            )
+            be = self.tokenizer.pad(
+                feats,
+                padding=True,
+                pad_to_multiple_of=self.pad_to_multiple_of,
+                return_tensors="pt",
+            )
+
+        # Convert to plain dict
+        batch = {k: v for k, v in be.items()}
+
+        # Create labels from padded input_ids and mask out padding
+        labels = batch["input_ids"].clone()
+        if getattr(self.tokenizer, "pad_token_id", None) is not None:
+            labels[batch["input_ids"] == self.tokenizer.pad_token_id] = -100
+        else:
+            # Fall back to attention mask when no pad token id is defined
+            labels[batch["attention_mask"] == 0] = -100
+        batch["labels"] = labels
+        return batch
+
+
+def create_pretokenization_function(
+    tokenizer: PreTrainedTokenizerBase,
+    max_length: int,
+    instruction_template: str,
+    template_format: str,
+    detected_format: Optional[tuple],
+    auto_detect_format: bool,
+):
+    """Create a function for pre-tokenizing dataset items via HuggingFace datasets.map()."""
+
+    # Determine the actual template format to use
+    if template_format == "auto":
+        if hasattr(tokenizer, "chat_template") and tokenizer.chat_template is not None:
+            actual_template_format = "chat"
+        else:
+            actual_template_format = "basic"
+    else:
+        actual_template_format = template_format
+
+    def _format_text_for_pretokenization(instruction: str, response: str) -> str:
+        """Format instruction and response using the appropriate template."""
+        if actual_template_format == "chat":
+            messages = [
+                {"role": "user", "content": instruction},
+                {"role": "assistant", "content": response},
+            ]
+            formatted = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False
+            )
+            return formatted if isinstance(formatted, str) else str(formatted)
+        elif actual_template_format == "alpaca":
+            return f"### Instruction:\n{instruction}\n\n### Response:\n{response}"
+        elif actual_template_format == "chatml":
+            return f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>"
+        elif actual_template_format == "basic":
+            return instruction_template.format(
+                instruction=instruction, response=response
+            )
+        else:
+            raise ValueError(f"Unknown template format: {actual_template_format}")
+
+    def pretokenize_item(item):
+        """Pre-tokenize a single dataset item."""
+        # Convert to standard format if auto-detection is enabled
+        if auto_detect_format and detected_format:
+            try:
+                converted_item = DatasetFormatter.convert_to_standard_format(
+                    item, detected_format
+                )
+            except Exception:
+                converted_item = item
+        else:
+            converted_item = item
+
+        # Extract instruction and response
+        if "instruction" in converted_item and "response" in converted_item:
+            instruction = converted_item["instruction"]
+            response = converted_item["response"]
+            text = _format_text_for_pretokenization(instruction, response)
+        elif "text" in converted_item:
+            text = converted_item["text"]
+        elif "instruction" in item and "response" in item:
+            instruction = item["instruction"]
+            response = item["response"]
+            text = _format_text_for_pretokenization(instruction, response)
+        elif "text" in item:
+            text = item["text"]
+        else:
+            raise ValueError(
+                f"Dataset item must contain either 'instruction'+'response' or 'text' fields. Available keys: {list(item.keys())}"
+            )
+
+        # Tokenize
+        encoding = tokenizer(
+            text,
+            truncation=True,
+            padding=False,
+            max_length=max_length,
+            return_tensors=None,  # Return lists, not tensors
+        )
+
+        # Create labels (copy of input_ids)
+        labels = encoding["input_ids"]
+
+        return {
+            "input_ids": encoding["input_ids"],
+            "attention_mask": encoding["attention_mask"],
+            "labels": labels,
+        }
+
+    return pretokenize_item
+
+
+def get_cache_key(
+    dataset_path: str,
+    tokenizer_name: str,
+    template_format: str,
+    max_seq_length: int,
+    detected_format: Optional[tuple],
+    instruction_template: str,
+) -> str:
+    """Generate a cache key for pre-tokenized datasets."""
+    import hashlib
+
+    key_parts = [
+        dataset_path,
+        tokenizer_name,
+        template_format,
+        str(max_seq_length),
+        str(detected_format),
+        instruction_template,
+    ]
+    key_string = "|".join(key_parts)
+    return hashlib.md5(key_string.encode()).hexdigest()
+
+
+def pretokenize_and_cache_dataset(
+    data: List[Dict[str, Any]],
+    tokenizer: PreTrainedTokenizerBase,
+    data_args: DataArguments,
+    detected_format: Optional[tuple],
+    cache_dir: str,
+    split_name: str,
+) -> List[Dict[str, Any]]:
+    """Pre-tokenize dataset and cache results to disk."""
+
+    # Generate cache key
+    cache_key = get_cache_key(
+        dataset_path=data_args.dataset_name_or_path,
+        tokenizer_name=tokenizer.name_or_path,
+        template_format=data_args.template_format,
+        max_seq_length=data_args.max_seq_length,
+        detected_format=detected_format,
+        instruction_template=data_args.instruction_template,
+    )
+
+    cache_path = os.path.join(cache_dir, f"{split_name}_{cache_key}")
+
+    # Try to load from cache
+    if os.path.exists(cache_path):
+        try:
+            logger.info(
+                f"Loading pre-tokenized {split_name} dataset from cache: {cache_path}"
+            )
+            cached_dataset = load_from_disk(cache_path)
+            return [item for item in cached_dataset]
+        except Exception as e:
+            logger.warning(f"Failed to load cached dataset: {e}. Re-tokenizing...")
+
+    # Pre-tokenize the dataset
+    logger.info(f"Pre-tokenizing {split_name} dataset ({len(data)} examples)...")
+
+    # Convert to HF Dataset
+    hf_dataset = HFDataset.from_list(data)
+
+    # Create pre-tokenization function
+    pretokenize_fn = create_pretokenization_function(
+        tokenizer=tokenizer,
+        max_length=data_args.max_seq_length,
+        instruction_template=data_args.instruction_template,
+        template_format=data_args.template_format,
+        detected_format=detected_format,
+        auto_detect_format=data_args.auto_detect_format,
+    )
+
+    # Apply pre-tokenization
+    tokenized_dataset = hf_dataset.map(
+        pretokenize_fn,
+        remove_columns=hf_dataset.column_names,
+        num_proc=min(4, os.cpu_count() or 1),
+        desc=f"Pre-tokenizing {split_name}",
+    )
+
+    # Save to cache
+    os.makedirs(cache_dir, exist_ok=True)
+    tokenized_dataset.save_to_disk(cache_path)
+    logger.info(f"Cached pre-tokenized {split_name} dataset to: {cache_path}")
+
+    # Convert back to list
+    return [item for item in tokenized_dataset]
 
 
 def load_quantization_config_from_args(
@@ -520,13 +774,23 @@ def load_model_and_tokenizer(
                 f"CUDA test failed: {e} - falling back to manual device placement"
             )
 
+    # Prepare model loading kwargs
+    model_kwargs = {
+        "quantization_config": quant_config,
+        "torch_dtype": torch_dtype,
+        "trust_remote_code": model_args.trust_remote_code,
+        "token": auth_token,
+        "device_map": device_map,
+    }
+
+    # Add attention implementation if specified and not "auto"
+    if model_args.attn_implementation != "auto":
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+        logger.info(f"Using attention implementation: {model_args.attn_implementation}")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
-        quantization_config=quant_config,
-        torch_dtype=torch_dtype,
-        trust_remote_code=model_args.trust_remote_code,
-        token=auth_token,
-        device_map=device_map,
+        **model_kwargs,
     )
 
     # Move to device if device_map wasn't used
@@ -660,7 +924,7 @@ def create_trainer(
     train_dataset: Dataset,
     eval_dataset: Optional[Dataset],
     training_args: TrainingArguments,
-    data_collator: DataCollatorForLanguageModeling,
+    data_collator,
 ) -> Trainer:
     """Create and configure the trainer."""
 
@@ -742,6 +1006,18 @@ def main(log_file=None):
         type=str,
         default=None,
         help="Configuration name for HuggingFace dataset",
+    )
+
+    # Attention implementation flag
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="auto",
+        choices=["auto", "eager", "sdpa", "flash_attention_2"],
+        help=(
+            "Attention implementation for models that support it. 'auto' uses model default, "
+            "'sdpa' uses PyTorch SDPA (requires PyTorch 2.0+), 'flash_attention_2' uses Flash Attention v2 (if installed)."
+        ),
     )
     parser.add_argument(
         "--max_seq_length", type=int, default=2048, help="Maximum sequence length"
@@ -933,6 +1209,20 @@ def main(log_file=None):
         help="Enable gradient checkpointing for memory efficiency",
     )
 
+    # Pre-tokenization options
+    parser.add_argument(
+        "--pretokenize",
+        action="store_true",
+        default=False,
+        help="Enable pre-tokenization via HuggingFace datasets.map and cache to disk",
+    )
+    parser.add_argument(
+        "--pretokenize_cache_dir",
+        type=str,
+        default=None,
+        help="Directory to store/load tokenized dataset cache. Defaults to <output_dir>/tokenized_cache",
+    )
+
     # Additional options
     parser.add_argument(
         "--resume_from_checkpoint",
@@ -1110,6 +1400,7 @@ def main(log_file=None):
         use_auth_token=args.use_auth_token,
         trust_remote_code=args.trust_remote_code,
         torch_dtype=args.torch_dtype,
+        attn_implementation=args.attn_implementation,
     )
 
     data_args = DataArguments(
@@ -1206,9 +1497,18 @@ def main(log_file=None):
         ),
         remove_unused_columns=False,
         dataloader_pin_memory=pin_memory_flag,
+        dataloader_num_workers=8,
+        dataloader_persistent_workers=True,
+        dataloader_prefetch_factor=2,
+        group_by_length=True,
         gradient_checkpointing=args.gradient_checkpointing,
         fp16=args.torch_dtype == "float16",
         bf16=args.torch_dtype == "bfloat16",
+        optim=(
+            "paged_adamw_8bit"
+            if (args.use_4bit or args.use_8bit)
+            else "adamw_torch_fused"
+        ),
         max_grad_norm=args.max_grad_norm,
         label_names=["labels"],  # Quiet PEFT label warning
     )
@@ -1260,6 +1560,37 @@ def main(log_file=None):
             detected_format = DatasetFormatter.detect_format(data)
             logger.info(f"Detected dataset format: {detected_format}")
 
+        # Pre-tokenization if enabled
+        is_pretokenized = False
+        if args.pretokenize:
+            cache_dir = args.pretokenize_cache_dir or os.path.join(
+                args.output_dir, "tokenized_cache"
+            )
+
+            # Pre-tokenize train data
+            train_data = pretokenize_and_cache_dataset(
+                data=train_data,
+                tokenizer=tokenizer,
+                data_args=data_args,
+                detected_format=detected_format,
+                cache_dir=cache_dir,
+                split_name="train",
+            )
+
+            # Pre-tokenize validation data if it exists
+            if val_data:
+                val_data = pretokenize_and_cache_dataset(
+                    data=val_data,
+                    tokenizer=tokenizer,
+                    data_args=data_args,
+                    detected_format=detected_format,
+                    cache_dir=cache_dir,
+                    split_name="val",
+                )
+
+            is_pretokenized = True
+            logger.info("Using pre-tokenized datasets")
+
         # Create datasets
         train_dataset = InstructionDataset(
             train_data,
@@ -1267,6 +1598,7 @@ def main(log_file=None):
             data_args.max_seq_length,
             data_args.instruction_template,
             data_args.auto_detect_format,
+            is_pretokenized,
             data_args.template_format,
             detected_format=detected_format,
         )
@@ -1279,14 +1611,14 @@ def main(log_file=None):
                 data_args.max_seq_length,
                 data_args.instruction_template,
                 data_args.auto_detect_format,
+                is_pretokenized,
                 data_args.template_format,
                 detected_format=detected_format,
             )
 
-        # Create data collator
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer,
-            mlm=False,
+        # Create data collator (dynamic padding + label masking on padding)
+        data_collator = DataCollatorForCausalLMWithPadding(
+            tokenizer=tokenizer, pad_to_multiple_of=8
         )
 
         mask_handles = []

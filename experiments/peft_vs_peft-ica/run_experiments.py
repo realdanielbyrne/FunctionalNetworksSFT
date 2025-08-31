@@ -17,12 +17,13 @@ Both experiments apply consistent data preprocessing to ensure fair comparison:
 - Preprocessing statistics are logged for transparency
 
 Usage:
-    python experiments/peft_vs_peft-ica/run_experiments.py [--experiment {a,b,both}] [--verbose]
+    python experiments/peft_vs_peft-ica/run_experiments.py [--experiment {a,b,c,all}] [--verbose]
 
 Examples:
 python experiments/peft_vs_peft-ica/run_experiments.py --experiment a
 python experiments/peft_vs_peft-ica/run_experiments.py --experiment b
-python experiments/peft_vs_peft-ica/run_experiments.py --experiment both
+python experiments/peft_vs_peft-ica/run_experiments.py --experiment c
+python experiments/peft_vs_peft-ica/run_experiments.py --experiment all
 python experiments/peft_vs_peft-ica/run_experiments.py
 """
 

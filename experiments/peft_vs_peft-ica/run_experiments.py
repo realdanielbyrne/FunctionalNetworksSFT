@@ -36,6 +36,39 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 
+# Import torch for CUDA memory management
+try:
+    import torch
+except ImportError:
+    torch = None
+
+
+def clear_cuda_memory():
+    """Clear CUDA memory cache to free up GPU memory between experiments."""
+    if torch is not None and torch.cuda.is_available():
+        logger = logging.getLogger(__name__)
+
+        # Get memory info before clearing
+        allocated_before = torch.cuda.memory_allocated() / 1024**2  # MB
+        reserved_before = torch.cuda.memory_reserved() / 1024**2  # MB
+
+        # Clear memory
+        torch.cuda.empty_cache()
+
+        # Get memory info after clearing
+        allocated_after = torch.cuda.memory_allocated() / 1024**2  # MB
+        reserved_after = torch.cuda.memory_reserved() / 1024**2  # MB
+
+        logger.info(f"CUDA memory cleared:")
+        logger.info(
+            f"  Allocated: {allocated_before:.1f} MB → {allocated_after:.1f} MB"
+        )
+        logger.info(f"  Reserved: {reserved_before:.1f} MB → {reserved_after:.1f} MB")
+        logger.info(f"  Freed: {(reserved_before - reserved_after):.1f} MB")
+    else:
+        logger = logging.getLogger(__name__)
+        logger.debug("CUDA not available or torch not imported - skipping memory clear")
+
 
 # Configure logging
 def setup_logging(verbose=False):
@@ -82,9 +115,14 @@ def run_experiment_a():
         duration = end_time - start_time
         logger.info(f"Experiment A completed in {duration:.2f} seconds")
 
+        # Clear CUDA memory after experiment
+        clear_cuda_memory()
+
         return success
     except Exception as e:
         logger.error(f"Experiment A failed: {str(e)}")
+        # Clear CUDA memory even on failure
+        clear_cuda_memory()
         return False
     finally:
         # Restore original directory
@@ -110,9 +148,14 @@ def run_experiment_b():
         duration = end_time - start_time
         logger.info(f"Experiment B completed in {duration:.2f} seconds")
 
+        # Clear CUDA memory after experiment
+        clear_cuda_memory()
+
         return success
     except Exception as e:
         logger.error(f"Experiment B failed: {str(e)}")
+        # Clear CUDA memory even on failure
+        clear_cuda_memory()
         return False
 
 
@@ -143,12 +186,17 @@ def run_evaluation():
         duration = end_time - start_time
         logger.info(f"Model evaluation completed in {duration:.2f} seconds")
 
+        # Clear CUDA memory after evaluation
+        clear_cuda_memory()
+
         # Restore original argv
         sys.argv = original_argv
 
         return True
     except Exception as e:
         logger.error(f"Model evaluation failed: {str(e)}")
+        # Clear CUDA memory even on failure
+        clear_cuda_memory()
         return False
 
 
@@ -313,9 +361,13 @@ def main():
             logger.info(
                 f"Experiment C completed in {end_time_c - start_time_c:.2f} seconds"
             )
+            # Clear CUDA memory after experiment
+            clear_cuda_memory()
             results["experiment_c"] = success_c
         except Exception as e:
             logger.error(f"Experiment C failed: {str(e)}")
+            # Clear CUDA memory even on failure
+            clear_cuda_memory()
             results["experiment_c"] = False
 
     # Run evaluation if selected set completed successfully
@@ -330,6 +382,9 @@ def main():
 
     # Calculate total time
     total_time = time.time() - start_time
+
+    # Final CUDA memory cleanup
+    clear_cuda_memory()
 
     # Print final results
     print("\n" + "=" * 80)

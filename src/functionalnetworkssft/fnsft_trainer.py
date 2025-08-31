@@ -1462,8 +1462,22 @@ def main(log_file=None):
         except Exception as e:
             logger.debug(f"Could not enable TF32: {e}")
     pin_memory_flag = device_for_args.type == "cuda"
+
+    # Determine optimal number of workers based on platform
+    # Windows has issues with multiprocessing spawn and CUDA libraries
+    import platform
+
+    if platform.system() == "Windows":
+        # Use fewer workers on Windows to avoid paging file issues with CUDA libraries
+        num_workers = 2
+        logger.info("Using 2 DataLoader workers on Windows to avoid paging file issues")
+    else:
+        # Use more workers on Unix-like systems
+        num_workers = 8
+        logger.info("Using 8 DataLoader workers on Unix-like systems")
+
     logger.info(
-        f"DataLoader pin_memory: {pin_memory_flag} | TF32 matmul: "
+        f"DataLoader pin_memory: {pin_memory_flag} | num_workers: {num_workers} | TF32 matmul: "
         f"{getattr(torch.backends.cuda.matmul, 'allow_tf32', None) if device_for_args.type == 'cuda' else 'N/A'} | "
         f"TF32 cuDNN: {getattr(torch.backends.cudnn, 'allow_tf32', None) if device_for_args.type == 'cuda' else 'N/A'}"
     )
@@ -1497,7 +1511,7 @@ def main(log_file=None):
         ),
         remove_unused_columns=False,
         dataloader_pin_memory=pin_memory_flag,
-        dataloader_num_workers=8,
+        dataloader_num_workers=num_workers,
         dataloader_persistent_workers=True,
         dataloader_prefetch_factor=2,
         group_by_length=True,

@@ -1303,7 +1303,7 @@ def main(log_file=None):
     parser.add_argument(
         "--ica_components",
         type=int,
-        default=10,
+        default=5,
         help="An integer argument that specifies the number of independent components to extract when ICA needs to be performed on-the-fly during training.",
     )
     parser.add_argument(

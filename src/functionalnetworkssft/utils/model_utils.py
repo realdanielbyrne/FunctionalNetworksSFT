@@ -382,7 +382,22 @@ def load_dataset_from_path(
     dataset_name_or_path: str,
     dataset_config_name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Load dataset from local file or HuggingFace hub."""
+    """Load dataset from local file or HuggingFace hub (legacy function - loads train split only)."""
+    splits_data = load_dataset_with_splits(dataset_name_or_path, dataset_config_name)
+    return splits_data["train"]
+
+
+def load_dataset_with_splits(
+    dataset_name_or_path: str,
+    dataset_config_name: Optional[str] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Load dataset from local file or HuggingFace hub with proper split handling.
+
+    Returns:
+        Dictionary with split names as keys and data as values.
+        Always includes 'train' key, may include 'validation', 'test', etc.
+    """
     if os.path.isfile(dataset_name_or_path):
         logger.info(f"Loading dataset from local file: {dataset_name_or_path}")
         # Load from local file using HuggingFace datasets
@@ -400,14 +415,42 @@ def load_dataset_from_path(
             )
         else:
             raise ValueError(f"Unsupported file format: {dataset_name_or_path}")
+
         data = [item for item in dataset]
+        logger.info(f"Loaded {len(data)} examples from local file")
+        return {"train": data}
+
     else:
         logger.info(f"Loading dataset from HuggingFace hub: {dataset_name_or_path}")
-        dataset = load_dataset(dataset_name_or_path, dataset_config_name, split="train")
-        data = [item for item in dataset]
 
-    logger.info(f"Loaded {len(data)} examples")
-    return data  # type: ignore
+        # Load the full dataset to check available splits
+        try:
+            full_dataset = load_dataset(dataset_name_or_path, dataset_config_name)
+        except Exception as e:
+            logger.error(f"Failed to load dataset {dataset_name_or_path}: {e}")
+            raise
+
+        available_splits = list(full_dataset.keys())
+        logger.info(f"Available splits: {available_splits}")
+
+        splits_data = {}
+
+        # Load each available split
+        for split_name in available_splits:
+            split_data = [item for item in full_dataset[split_name]]
+            splits_data[split_name] = split_data
+            logger.info(f"Loaded {len(split_data)} examples from '{split_name}' split")
+
+        # Ensure we always have a 'train' split
+        if "train" not in splits_data:
+            # If no train split, use the first available split as train
+            first_split = available_splits[0]
+            logger.warning(
+                f"No 'train' split found. Using '{first_split}' split as training data."
+            )
+            splits_data["train"] = splits_data[first_split]
+
+        return splits_data
 
 
 def split_dataset(
@@ -422,6 +465,54 @@ def split_dataset(
     val_data = data[split_idx:]
 
     logger.info(f"Split dataset: {len(train_data)} train, {len(val_data)} validation")
+    return train_data, val_data
+
+
+def prepare_train_val_splits(
+    splits_data: Dict[str, List[Dict[str, Any]]],
+    validation_split: float = 0.1,
+    prefer_existing_splits: bool = True,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Prepare training and validation data from dataset splits.
+
+    Args:
+        splits_data: Dictionary with split names as keys and data as values
+        validation_split: Fraction for validation if creating custom split
+        prefer_existing_splits: Whether to use existing validation split if available
+
+    Returns:
+        Tuple of (train_data, val_data)
+    """
+    train_data = splits_data["train"]
+    val_data = []
+
+    # Check if we should use existing validation split
+    if prefer_existing_splits:
+        # Look for validation split with common names
+        validation_split_names = ["validation", "val", "dev", "valid"]
+
+        for split_name in validation_split_names:
+            if split_name in splits_data:
+                val_data = splits_data[split_name]
+                logger.info(
+                    f"Using existing '{split_name}' split with {len(val_data)} examples for validation"
+                )
+                break
+
+    # If no existing validation split found or not preferred, create custom split
+    if not val_data and validation_split > 0:
+        logger.info(
+            f"No existing validation split found. Creating custom split with {validation_split:.1%} of training data"
+        )
+        train_data, val_data = split_dataset(train_data, validation_split)
+    elif val_data:
+        logger.info(
+            f"Using {len(train_data)} training examples and {len(val_data)} validation examples from existing splits"
+        )
+    else:
+        logger.info(f"Using {len(train_data)} training examples with no validation")
+
     return train_data, val_data
 
 

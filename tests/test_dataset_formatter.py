@@ -335,6 +335,50 @@ class TestDatasetFormatter:
         assert filtered_data[0]["instruction"] == "Short instruction"
         assert filtered_data[1]["instruction"] == "Medium instruction"
 
+    def test_detect_camel_ai_physics_format(self):
+        """Test detection of camel-ai/physics dataset format (message_1, message_2, topic, sub_topic)."""
+        data = [
+            {
+                "message_1": "What is Newton's first law of motion?",
+                "message_2": "Newton's first law states that an object at rest stays at rest and an object in motion stays in motion with the same speed and in the same direction unless acted upon by an unbalanced force.",
+                "topic": "Classical Mechanics",
+                "sub_topic": "Newton's Laws",
+            },
+            {
+                "message_1": "Explain the concept of energy conservation.",
+                "message_2": "Energy conservation is a fundamental principle stating that energy cannot be created or destroyed, only transformed from one form to another.",
+                "topic": "Thermodynamics",
+                "sub_topic": "Conservation Laws",
+            },
+        ]
+
+        detected_format = DatasetFormatter.detect_format(data)
+        assert detected_format == ("message_1", "message_2", "sub_topic", "topic")
+
+    def test_convert_camel_ai_physics_format(self):
+        """Test conversion of camel-ai/physics dataset format."""
+        item = {
+            "message_1": "What is the speed of light?",
+            "message_2": "The speed of light in vacuum is approximately 299,792,458 meters per second.",
+            "topic": "Electromagnetism",
+            "sub_topic": "Wave Properties",
+        }
+
+        converted_item = DatasetFormatter.convert_to_standard_format(
+            item, ("message_1", "message_2", "sub_topic", "topic")
+        )
+
+        # Should map message_1 to instruction and message_2 to response
+        # topic and sub_topic should be ignored
+        assert converted_item["instruction"] == "What is the speed of light?"
+        assert (
+            converted_item["response"]
+            == "The speed of light in vacuum is approximately 299,792,458 meters per second."
+        )
+        # Verify that topic and sub_topic are not included in the converted item
+        assert "topic" not in converted_item
+        assert "sub_topic" not in converted_item
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

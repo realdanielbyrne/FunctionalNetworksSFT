@@ -77,6 +77,11 @@ class DatasetFormatter:
         },
         # Text-only format (already formatted)
         ("text",): lambda item: {"text": item["text"]},
+        # camel-ai/physics dataset format (message_1, message_2, topic, sub_topic)
+        ("message_1", "message_2", "sub_topic", "topic"): lambda item: {
+            "instruction": item["message_1"],
+            "response": item["message_2"],
+        },
     }
 
     @staticmethod
@@ -120,6 +125,12 @@ class DatasetFormatter:
             ("instruction", "context", "response"),  # Databricks Dolly format
             ("instruction", "response"),
             ("instruction", "output"),
+            (
+                "message_1",
+                "message_2",
+                "sub_topic",
+                "topic",
+            ),  # camel-ai/physics dataset format
             ("assistant", "system", "user"),  # System-user-assistant format
             ("prompt", "completion"),
             ("prompt", "response"),

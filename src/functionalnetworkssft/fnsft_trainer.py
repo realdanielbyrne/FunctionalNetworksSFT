@@ -163,6 +163,12 @@ class DataArguments:
     validation_split: float = field(
         default=0.1, metadata={"help": "Fraction of data to use for validation"}
     )
+    use_existing_splits: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to use existing validation/test splits from HuggingFace datasets"
+        },
+    )
     auto_detect_format: bool = field(
         default=True,
         metadata={"help": "Automatically detect and convert dataset format"},
@@ -237,7 +243,9 @@ from .utils.model_utils import (
     load_quantization_config,
     setup_lora,
     load_dataset_from_path,
+    load_dataset_with_splits,
     split_dataset,
+    prepare_train_val_splits,
     save_model_and_tokenizer,
     convert_to_gguf,
 )
@@ -828,8 +836,18 @@ def setup_lora_from_args(
 
 
 def load_dataset_from_args(data_args: DataArguments) -> List[Dict[str, Any]]:
-    """Load dataset from arguments."""
+    """Load dataset from arguments (legacy function - loads train split only)."""
     return load_dataset_from_path(
+        dataset_name_or_path=data_args.dataset_name_or_path,
+        dataset_config_name=data_args.dataset_config_name,
+    )
+
+
+def load_dataset_with_splits_from_args(
+    data_args: DataArguments,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Load dataset with all available splits from arguments."""
+    return load_dataset_with_splits(
         dataset_name_or_path=data_args.dataset_name_or_path,
         dataset_config_name=data_args.dataset_config_name,
     )
@@ -1036,6 +1054,18 @@ def main(log_file=None):
         type=float,
         default=0.1,
         help="Fraction of data for validation",
+    )
+    parser.add_argument(
+        "--use_existing_splits",
+        action="store_true",
+        default=True,
+        help="Use existing validation/test splits from HuggingFace datasets",
+    )
+    parser.add_argument(
+        "--no_use_existing_splits",
+        dest="use_existing_splits",
+        action="store_false",
+        help="Disable using existing splits and create custom validation split",
     )
     parser.add_argument(
         "--auto_detect_format",
@@ -1412,6 +1442,7 @@ def main(log_file=None):
         max_seq_length=args.max_seq_length,
         instruction_template=args.instruction_template,
         validation_split=args.validation_split,
+        use_existing_splits=args.use_existing_splits,
         auto_detect_format=args.auto_detect_format,
         template_format=args.template_format,
         response_max_length=args.response_max_length,
@@ -1566,24 +1597,52 @@ def main(log_file=None):
         # Adjust training arguments based on training mode
         training_args = adjust_training_args_for_mode(training_args, lora_args.use_peft)
 
-        # Load and prepare dataset
-        data = load_dataset_from_args(data_args)
+        # Load and prepare dataset with split awareness
+        if data_args.use_existing_splits:
+            logger.info("Loading dataset with split awareness enabled")
+            splits_data = load_dataset_with_splits_from_args(data_args)
 
-        # Apply data preprocessing for experiments (filter by Context and Response lengths)
-        from .utils.model_utils import preprocess_dataset_for_experiments
+            # Apply preprocessing to all splits
+            from .utils.model_utils import preprocess_dataset_for_experiments
 
-        data = preprocess_dataset_for_experiments(
-            data,
-            response_max_length=data_args.response_max_length,
-            instruction_max_length=data_args.instruction_max_length,
-        )
+            processed_splits = {}
+            for split_name, split_data in splits_data.items():
+                processed_data = preprocess_dataset_for_experiments(
+                    split_data,
+                    response_max_length=data_args.response_max_length,
+                    instruction_max_length=data_args.instruction_max_length,
+                )
+                processed_splits[split_name] = processed_data
+                logger.info(
+                    f"Processed {split_name} split: {len(processed_data)} examples"
+                )
 
-        train_data, val_data = split_dataset(data, data_args.validation_split)
+            # Prepare train/validation splits using existing splits if available
+            train_data, val_data = prepare_train_val_splits(
+                processed_splits,
+                data_args.validation_split,
+                prefer_existing_splits=True,
+            )
+        else:
+            logger.info("Loading dataset with legacy single-split mode")
+            # Legacy behavior: load only train split and create custom validation split
+            data = load_dataset_from_args(data_args)
+
+            # Apply data preprocessing for experiments (filter by Context and Response lengths)
+            from .utils.model_utils import preprocess_dataset_for_experiments
+
+            data = preprocess_dataset_for_experiments(
+                data,
+                response_max_length=data_args.response_max_length,
+                instruction_max_length=data_args.instruction_max_length,
+            )
+
+            train_data, val_data = split_dataset(data, data_args.validation_split)
 
         # Detect dataset format once to avoid duplicate logging
         detected_format = None
-        if data_args.auto_detect_format and data:
-            detected_format = DatasetFormatter.detect_format(data)
+        if data_args.auto_detect_format and train_data:
+            detected_format = DatasetFormatter.detect_format(train_data)
             logger.info(f"Detected dataset format: {detected_format}")
 
         # Pre-tokenization if enabled

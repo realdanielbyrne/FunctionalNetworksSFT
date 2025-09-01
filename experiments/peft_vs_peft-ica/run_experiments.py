@@ -61,9 +61,9 @@ def clear_cuda_memory():
 
         logger.info(f"CUDA memory cleared:")
         logger.info(
-            f"  Allocated: {allocated_before:.1f} MB → {allocated_after:.1f} MB"
+            f"  Allocated: {allocated_before:.1f} MB -> {allocated_after:.1f} MB"
         )
-        logger.info(f"  Reserved: {reserved_before:.1f} MB → {reserved_after:.1f} MB")
+        logger.info(f"  Reserved: {reserved_before:.1f} MB -> {reserved_after:.1f} MB")
         logger.info(f"  Freed: {(reserved_before - reserved_after):.1f} MB")
     else:
         logger = logging.getLogger(__name__)

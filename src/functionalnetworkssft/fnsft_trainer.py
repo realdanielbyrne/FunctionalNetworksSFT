@@ -36,6 +36,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union, Any, Literal
 import warnings
 
+# Disable tokenizer parallelism to avoid forking warnings
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import torch
 from torch.utils.data import Dataset
 import transformers

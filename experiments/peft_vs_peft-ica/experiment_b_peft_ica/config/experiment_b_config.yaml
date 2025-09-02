@@ -14,14 +14,15 @@
 
 # Model configuration
 #model_name_or_path: "microsoft/DialoGPT-small"
-Smodel_name_or_path: "meta-llama/Llama-3.2-3B-Instruct"
+model_name_or_path: "meta-llama/Llama-3.2-3B-Instruct"
 #model_name_or_path: "Qwen/Qwen3-0.6B"
 #model_name_or_path: "unsloth/Llama-3.2-3B-bnb-4bit"
 torch_dtype: "auto"  # Use platform-optimized dtype
 
 # Dataset configuration
 #dataset_name_or_path: "databricks/databricks-dolly-15k"
-dataset_name_or_path: "camel-ai/physics"
+#dataset_name_or_path: "camel-ai/physics"
+dataset_name_or_path: "YaTharThShaRma999/Physics_dataset"
 #dataset_name_or_path: "datasets/sarcasm.csv"
 validation_split: 0.1  # 10% for validation
 
@@ -73,23 +74,23 @@ wandb_project: "FnSFT_PEFT+ICA_Ablate"
 
 # Hub upload (merged model)
 push_to_hub: false
-hub_repo_id: "Llama-3.2-1B-Instruct"
-hub_commit_message: "Llama-3.2-1B-Instruct PEFT+ICA databricks-dolly-15k FT, Lesion Mode[0]"
+hub_repo_id: "Llama-3.2-3B-Instruct"
+hub_commit_message: "Llama-3.2-3B-Instruct PEFT+ICA camel-ai/physics FT, Lesion Mode"
 hub_private: false
 merge_adapter_with_base: true  # Merge adapter with base model
 upload_merged_model: true      # Upload merged model to Hub instead of adapter
 
 # Additional options - IDENTICAL TO EXPERIMENT A
 resume_from_checkpoint: null
-convert_to_gguf: false
+convert_to_gguf: true
 
 
 # ICA masking (ENABLED for Experiment B) - THE ONLY DIFFERENCE
 mask_mode: "lesion"        # Enable ICA masking in 'lesion' mode
-ica_template_path: "ica_templates/llama-3.2-1b/databricks_databricks-dolly-15k/global_templates.json"
+ica_template_path: "ica_templates/llama-3.2-3b/camel-ai_physics/global_templates.json"
 ica_components: 10      # Number of ICA components
 ica_percentile: 98.0    # Percentile threshold for neuron selection
-ica_component_ids: [0]
+ica_component_ids: [0, 1]
 
 # Authentication
 use_auth_token: true    # For gated model access

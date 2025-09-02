@@ -15,8 +15,10 @@ model_name_or_path: "meta-llama/Llama-3.2-3B-Instruct"
 torch_dtype: "auto"  # Use platform-optimized dtype
 
 # Dataset configuration
-dataset_name_or_path: "camel-ai/physics"
+#dataset_name_or_path: "camel-ai/physics"
+dataset_name_or_path: "YaTharThShaRma999/Physics_dataset"
 #dataset_name_or_path: "datasets/sarcasm.csv"
+
 validation_split: 0.1  # 10% for validation
 
 # Dataset preprocessing parameters
@@ -83,7 +85,7 @@ mask_mode: "preserve"      # Enable ICA masking in 'preserve' mode
 ica_template_path: "ica_templates/llama-3.2-1b/databricks_databricks-dolly-15k/global_templates.json"
 ica_components: 10      # Number of ICA components
 ica_percentile: 98.0    # Percentile threshold for neuron selection
-ica_component_ids: [0]
+ica_component_ids: [0, 1]
 
 # Authentication
 use_auth_token: true    # For gated model access

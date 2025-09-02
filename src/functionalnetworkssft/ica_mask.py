@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
-from sklearn.decomposition import FastICA
+from sklearn.decomposition import FastICA, PCA
 from transformers.modeling_utils import PreTrainedModel
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
@@ -46,6 +46,7 @@ class ICAMask:
         percentile: float = 98.0,
         sample_batches: int = 100,
         ica_dtype: Optional[str] = None,
+        max_pca_components: int = 1000,
     ):
         """
         Args:
@@ -55,10 +56,12 @@ class ICAMask:
             sample_batches: Number of batches to sample for ICA
 
             ica_dtype: 'float32'|'float16'|'bfloat16'|'auto'|None – dtype for ICA math
+            max_pca_components: Maximum PCA components for dimensionality reduction before ICA
         """
         self.num_components = num_components
         self.percentile = percentile
         self.sample_batches = sample_batches
+        self.max_pca_components = max_pca_components
 
         self.ica_dtype = ica_dtype
 
@@ -310,12 +313,47 @@ class ICAMask:
         Xz = (X - X_mean) / X_std
 
         k = n_components if n_components is not None else self.num_components
-        logger.info(
-            f"Global ICA: fitting FastICA with n_components={k} on shape {Xz.shape}"
-        )
-        ica = FastICA(n_components=k, random_state=0, max_iter=200, tol=1e-3)
-        _ = ica.fit_transform(Xz)  # time signals (unused downstream)
-        A = ica.mixing_  # [L*hidden_size, k] spatial maps
+
+        # Check if matrix is too large for LAPACK and apply PCA preprocessing if needed
+        matrix_elements = Xz.shape[0] * Xz.shape[1]
+        max_lapack_elements = 2**31 - 1  # LAPACK integer limit
+
+        if (
+            matrix_elements > max_lapack_elements
+            or Xz.shape[1] > self.max_pca_components
+        ):
+            logger.info(
+                f"Matrix too large for direct ICA ({Xz.shape}, {matrix_elements} elements). "
+                f"Applying PCA preprocessing to reduce dimensionality."
+            )
+
+            # Apply PCA to reduce dimensionality
+            n_pca_components = min(
+                self.max_pca_components, Xz.shape[1], Xz.shape[0] - 1
+            )
+            logger.info(
+                f"Reducing dimensionality with PCA: {Xz.shape[1]} -> {n_pca_components}"
+            )
+
+            pca = PCA(n_components=n_pca_components, random_state=0)
+            Xz_reduced = pca.fit_transform(Xz)
+
+            logger.info(
+                f"Global ICA: fitting FastICA with n_components={k} on PCA-reduced shape {Xz_reduced.shape}"
+            )
+            ica = FastICA(n_components=k, random_state=0, max_iter=200, tol=1e-3)
+            _ = ica.fit_transform(Xz_reduced)  # time signals (unused downstream)
+            A_reduced = ica.mixing_  # [n_pca_components, k] spatial maps in PCA space
+
+            # Transform back to original space
+            A = pca.components_.T @ A_reduced  # [L*hidden_size, k] spatial maps
+        else:
+            logger.info(
+                f"Global ICA: fitting FastICA with n_components={k} on shape {Xz.shape}"
+            )
+            ica = FastICA(n_components=k, random_state=0, max_iter=200, tol=1e-3)
+            _ = ica.fit_transform(Xz)  # time signals (unused downstream)
+            A = ica.mixing_  # [L*hidden_size, k] spatial maps
 
         if A is None or np.any(~np.isfinite(A)):
             logger.warning("FastICA mixing matrix invalid or None.")

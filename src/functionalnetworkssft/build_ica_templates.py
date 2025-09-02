@@ -205,6 +205,7 @@ def build_ica_templates(
     ica_dtype: str = "auto",
     max_seq_length: int = 512,
     template_format: str = "auto",
+    max_pca_components: int = 1000,
 ) -> None:
     """
     Main function to build ICA templates from multiple datasets.
@@ -219,6 +220,7 @@ def build_ica_templates(
         ica_dtype: Data type for ICA computation (default: "auto")
         max_seq_length: Maximum sequence length for tokenization (default: 512)
         template_format: Dataset format detection mode (default: "auto")
+        max_pca_components: Maximum PCA components for dimensionality reduction (default: 1000)
     """
 
     logger.info("Starting ICA template building process...")
@@ -264,6 +266,7 @@ def build_ica_templates(
         percentile=ica_percentile,
         sample_batches=100,
         ica_dtype=ica_dtype,
+        max_pca_components=max_pca_components,
     )
 
     # Use subset for ICA computation (limit to reasonable size)
@@ -406,6 +409,12 @@ def main():
         choices=["auto", "chat", "alpaca", "chatml", "basic"],
         help="Dataset format detection mode (default: auto)",
     )
+    parser.add_argument(
+        "--max_pca_components",
+        type=int,
+        default=1000,
+        help="Maximum PCA components for dimensionality reduction before ICA (default: 1000)",
+    )
 
     args = parser.parse_args()
 
@@ -486,6 +495,7 @@ def main():
             ica_dtype=args.ica_dtype,
             max_seq_length=args.max_seq_length,
             template_format=args.template_format,
+            max_pca_components=args.max_pca_components,
         )
     except Exception as e:
         logger.error(f"Template building failed: {e}")

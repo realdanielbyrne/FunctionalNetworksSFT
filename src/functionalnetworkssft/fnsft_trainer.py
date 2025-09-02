@@ -1714,6 +1714,7 @@ def main(log_file=None):
                 percentile=args.ica_percentile,
                 sample_batches=100,
                 ica_dtype=args.ica_dtype,
+                max_pca_components=1000,  # Default value for backward compatibility
             )
 
             # Parse layer specification if provided

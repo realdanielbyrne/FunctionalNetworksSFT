@@ -2,18 +2,15 @@
 """
 Experiment C: PEFT + ICA Masking Fine-Tuning Script (Preserve Mode)
 
-This script runs Experiment C three times sequentially with different ICA component
-masking configurations in preserve mask mode:
-- Run 1: [0] (preserve only component 0)
-- Run 2: [0, 1] (preserve components 0 and 1)
-- Run 3: [0, 1, 2] (preserve components 0, 1, and 2)
+This script runs Experiment C once with the ICA component configuration
+specified in the experiment_c_config.yaml file in preserve mask mode.
 
 Usage:
     python experiment_c_peft_ica_preserve/scripts/run_experiment_c.py
 
 The script will:
-1. Load the base configuration from experiment_c_config.yaml
-2. Run the fnsft_trainer with PEFT+ICA settings for each component configuration
+1. Load the configuration from experiment_c_config.yaml
+2. Run the fnsft_trainer with PEFT+ICA settings using the configured component IDs
 3. Save results to experiment_c_peft_ica_preserve/output/
 """
 
@@ -25,7 +22,9 @@ import yaml
 from functionalnetworkssft.fnsft_trainer import main as fnsft_main
 
 # Ensure output directory exists before configuring logging
-os.makedirs("experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output", exist_ok=True)
+os.makedirs(
+    "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output", exist_ok=True
+)
 
 # Configure logging
 logging.basicConfig(
@@ -41,27 +40,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_config_for_components(base_config_path, component_ids, run_number):
+def update_config_with_dynamic_names(config_path):
     """
-    Create a temporary config file with specific component IDs and updated names for preserve mode.
+    Update config file with dynamic names based on the configured component IDs for preserve mode.
 
     Args:
-        base_config_path: Path to the base configuration file
-        component_ids: List of component IDs to preserve
-        run_number: Run number for naming
+        config_path: Path to the configuration file
 
     Returns:
-        Path to the temporary config file
+        Updated config dictionary
     """
-    # Load base config
-    with open(base_config_path, "r") as f:
+    # Load config
+    with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     # Ensure preserve mode
     config["mask_mode"] = "preserve"
 
-    # Update component IDs
-    config["ica_component_ids"] = component_ids
+    # Get component IDs from config
+    component_ids = config.get("ica_component_ids", [0, 1])
 
     # Update hub commit message (explicitly reference preserve mode)
     components_str = ",".join(map(str, component_ids))
@@ -73,45 +70,25 @@ def create_config_for_components(base_config_path, component_ids, run_number):
     wandb_components_str = "_".join(map(str, component_ids))
     config["wandb_run_name"] = f"exp_c_preserve_components_{wandb_components_str}"
 
-    # Update output directory to be run-specific
-    base_output = config.get(
-        "output_dir", "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output"
-    )
-    config["output_dir"] = (
-        f"{base_output}/run_{run_number}_components_{'_'.join(map(str, component_ids))}"
-    )
-
-    # Create temporary config file
-    temp_config_path = f"experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/temp_config_run_{run_number}.yaml"
-    with open(temp_config_path, "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
-
-    return temp_config_path
+    return config
 
 
-def run_single_experiment(config_path, component_ids, run_number):
+def run_single_experiment(config):
     """
-    Run a single experiment with specific component configuration (preserve mode).
+    Run a single experiment with the configured component IDs (preserve mode).
 
     Args:
-        config_path: Path to the configuration file
-        component_ids: List of component IDs to preserve
-        run_number: Run number for logging
+        config: Configuration dictionary
 
     Returns:
         bool: True if successful, False otherwise
     """
+    component_ids = config.get("ica_component_ids", [0, 1])
     components_str = ",".join(map(str, component_ids))
 
     logger.info("=" * 80)
-    logger.info(
-        f"EXPERIMENT C (PRESERVE) - RUN {run_number}: COMPONENTS [{components_str}] PRESERVED"
-    )
+    logger.info(f"EXPERIMENT C (PRESERVE): COMPONENTS [{components_str}] PRESERVED")
     logger.info("=" * 80)
-
-    # Load config to get actual values for logging
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
 
     logger.info(
         f"Model: {config.get('model_name_or_path', 'meta-llama/Llama-3.2-1B-Instruct')}"
@@ -128,126 +105,102 @@ def run_single_experiment(config_path, component_ids, run_number):
     logger.info(f"Output Directory: {config.get('output_dir')}")
     logger.info("=" * 80)
 
+    # Create temporary config file with updated names
+    temp_config_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/temp_config.yaml"
+    with open(temp_config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+
     # Simulate command line arguments for the fnsft_trainer
     original_argv = sys.argv.copy()
     try:
-        sys.argv = ["fnsft_trainer.py", "--config", config_path]
+        sys.argv = ["fnsft_trainer.py", "--config", temp_config_path]
 
-        logger.info(f"Starting training run {run_number} with config: {config_path}")
+        logger.info(f"Starting training with config: {temp_config_path}")
 
-        # Run the training with run-specific log file
-        log_file_path = (
-            f"experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/experiment_c_preserve_run_{run_number}.log"
-        )
+        # Run the training
+        log_file_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/experiment_c_preserve.log"
         fnsft_main(log_file=log_file_path)
 
-        logger.info(f"Experiment C Preserve Run {run_number} completed successfully!")
+        logger.info("Experiment C Preserve completed successfully!")
         logger.info(f"Results saved to: {config.get('output_dir')}")
         return True
 
     except Exception as e:
-        logger.error(f"Experiment C Preserve Run {run_number} failed with error: {str(e)}")
+        logger.error(f"Experiment C Preserve failed with error: {str(e)}")
         return False
     finally:
         # Restore original argv
         sys.argv = original_argv
+        # Clean up temporary config file
+        try:
+            if os.path.exists(temp_config_path):
+                os.remove(temp_config_path)
+        except Exception as e:
+            logger.warning(
+                f"Failed to clean up temporary config {temp_config_path}: {e}"
+            )
 
 
 def run_experiment_c_preserve():
     """
-    Run Experiment C (Preserve Mode): PEFT + ICA masking fine-tuning with multiple component configurations
+    Run Experiment C (Preserve Mode): PEFT + ICA masking fine-tuning with configured component IDs
     """
-    # Define the component configurations to test (exactly 3)
-    component_configurations = [
-        [0],  # Run 1: preserve only component 0
-        [0, 1],  # Run 2: preserve components 0 and 1
-        [0, 1, 2],  # Run 3: preserve components 0, 1, and 2
-    ]
+    # Set up the configuration file path
+    config_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/experiment_c_config.yaml"
 
-    # Set up the base configuration file path
-    base_config_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/experiment_c_config.yaml"
-
-    # Verify base configuration file exists
-    if not os.path.exists(base_config_path):
-        logger.error(f"Base configuration file not found: {base_config_path}")
+    # Verify configuration file exists
+    if not os.path.exists(config_path):
+        logger.error(f"Configuration file not found: {config_path}")
         return False
 
+    # Load and update config with dynamic names
+    config = update_config_with_dynamic_names(config_path)
+    component_ids = config.get("ica_component_ids", [0, 1])
+    components_str = ",".join(map(str, component_ids))
+
     logger.info("=" * 80)
-    logger.info("EXPERIMENT C (PRESERVE): MULTI-RUN PEFT + ICA MASKING FINE-TUNING")
+    logger.info("EXPERIMENT C (PRESERVE): PEFT + ICA MASKING FINE-TUNING")
     logger.info("=" * 80)
-    logger.info(f"Total runs planned: {len(component_configurations)}")
-    for i, components in enumerate(component_configurations, 1):
-        components_str = ",".join(map(str, components))
-        logger.info(f"  Run {i}: Components [{components_str}] preserved")
+    logger.info(f"Components to preserve: [{components_str}]")
     logger.info("=" * 80)
 
-    successful_runs = 0
-    failed_runs = 0
-    temp_config_files = []
+    # Run the experiment
+    success = run_single_experiment(config)
 
-    try:
-        for run_number, component_ids in enumerate(component_configurations, 1):
-            logger.info(f"\n{'='*60}")
-            logger.info(f"PREPARING RUN {run_number}/{len(component_configurations)}")
-            logger.info(f"{'='*60}")
+    # Final summary
+    logger.info("\n" + "=" * 80)
+    logger.info("EXPERIMENT C (PRESERVE) SUMMARY")
+    logger.info("=" * 80)
+    if success:
+        logger.info("✓ Experiment completed successfully")
+    else:
+        logger.error("✗ Experiment failed")
+    logger.info("=" * 80)
 
-            # Create temporary config for this run
-            temp_config_path = create_config_for_components(
-                base_config_path, component_ids, run_number
-            )
-            temp_config_files.append(temp_config_path)
-
-            # Run the experiment
-            success = run_single_experiment(temp_config_path, component_ids, run_number)
-
-            if success:
-                successful_runs += 1
-                logger.info(f"✓ Run {run_number} completed successfully")
-            else:
-                failed_runs += 1
-                logger.error(f"✗ Run {run_number} failed")
-                # Continue with next run even if this one failed
-
-        # Final summary
-        logger.info("\n" + "=" * 80)
-        logger.info("EXPERIMENT C (PRESERVE) MULTI-RUN SUMMARY")
-        logger.info("=" * 80)
-        logger.info(f"Total runs: {len(component_configurations)}")
-        logger.info(f"Successful runs: {successful_runs}")
-        logger.info(f"Failed runs: {failed_runs}")
-        logger.info("=" * 80)
-
-        return failed_runs == 0  # Return True only if all runs succeeded
-
-    finally:
-        # Clean up temporary config files
-        for temp_file in temp_config_files:
-            try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-                    logger.debug(f"Cleaned up temporary config: {temp_file}")
-            except Exception as e:
-                logger.warning(f"Failed to clean up temporary config {temp_file}: {e}")
+    return success
 
 
 if __name__ == "__main__":
     success = run_experiment_c_preserve()
     if success:
         print("\n" + "=" * 80)
-        print("🎉 ALL EXPERIMENT C (PRESERVE) RUNS COMPLETED SUCCESSFULLY!")
+        print("🎉 EXPERIMENT C (PRESERVE) COMPLETED SUCCESSFULLY!")
         print("=" * 80)
         print("Results saved to:")
         print("  • experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/")
-        print("  • Individual run directories for each component configuration")
-        print("\nRun configurations completed:")
-        component_configurations = [
-            [0],
-            [0, 1],
-            [0, 1, 2],
-        ]
-        for i, components in enumerate(component_configurations, 1):
-            components_str = ",".join(map(str, components))
-            print(f"  ✓ Run {i}: Components [{components_str}] preserved")
+
+        # Load config to show which components were used
+        config_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/experiment_c_config.yaml"
+        try:
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f)
+            component_ids = config.get("ica_component_ids", [0, 1])
+            components_str = ",".join(map(str, component_ids))
+            print(f"\nConfiguration completed:")
+            print(f"  ✓ Components [{components_str}] preserved in preserve mode")
+        except Exception as e:
+            print(f"\nNote: Could not read component configuration: {e}")
+
         print("\nTo run evaluation comparing models, use:")
         print("   python experiments/peft_vs_peft-ica/evaluate_models.py")
         print("   (Note: Both experiments A, B and C must be completed first)")
@@ -258,8 +211,7 @@ if __name__ == "__main__":
         print("=" * 80)
         print("Check the following log files for details:")
         print(
-            "  • experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/experiment_c_preserve_run_*.log"
+            "  • experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/experiment_c_preserve.log"
         )
         print("=" * 80)
         sys.exit(1)
-

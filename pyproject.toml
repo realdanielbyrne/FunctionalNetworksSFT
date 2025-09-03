@@ -54,6 +54,7 @@ dependencies = [
 fnsft = "functionalnetworkssft.fnsft_trainer:main"
 check-hf-token = "functionalnetworkssft.utils.hf_utilities:main"
 buildtemplates = "functionalnetworkssft.build_ica_templates:main"
+convert-gguf = "functionalnetworkssft.cli_gguf:main"
 
 [project.optional-dependencies]
 

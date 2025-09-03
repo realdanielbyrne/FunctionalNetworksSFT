@@ -599,8 +599,21 @@ def convert_to_gguf(
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
 
-        # Check if llama.cpp convert script exists
-        convert_script = "convert-hf-to-gguf.py"
+        # Check for llama.cpp convert script in common locations
+        candidate_scripts = [
+            "convert-hf-to-gguf.py",
+            os.path.join("scripts", "convert-hf-to-gguf.py"),
+        ]
+        convert_script = None
+        for cand in candidate_scripts:
+            if os.path.exists(cand):
+                convert_script = cand
+                break
+        if convert_script is None:
+            logger.error(
+                "convert-hf-to-gguf.py not found. Please clone llama.cpp and ensure the converter script is on PATH or placed in repo root or scripts/."
+            )
+            raise FileNotFoundError("convert-hf-to-gguf.py not found")
 
         cmd = [
             "python",
@@ -613,7 +626,15 @@ def convert_to_gguf(
         ]
 
         logger.info(f"Running GGUF conversion command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(
+                "GGUF conversion command failed with stderr:\n"
+                + (e.stderr or "<no stderr>")
+            )
+            logger.error("Stdout:\n" + (e.stdout or "<no stdout>"))
+            raise
 
         if result.returncode == 0:
             logger.info(f"Successfully converted to GGUF: {output_path}")

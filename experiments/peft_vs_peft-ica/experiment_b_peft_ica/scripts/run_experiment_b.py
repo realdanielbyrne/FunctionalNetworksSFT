@@ -85,12 +85,8 @@ def run_single_experiment(config):
     logger.info(f"EXPERIMENT B: COMPONENTS [{components_str}] MASKED")
     logger.info("=" * 80)
 
-    logger.info(
-        f"Model: {config.get('model_name_or_path', 'meta-llama/Llama-3.2-1B-Instruct')}"
-    )
-    logger.info(
-        f"Dataset: {config.get('dataset_name_or_path', 'databricks/databricks-dolly-15k')}"
-    )
+    logger.info(f"Model: {config.get('model_name_or_path')}")
+    logger.info(f"Dataset: {config.get('dataset_name_or_path')}")
     logger.info("Method: PEFT (LoRA) + ICA masking")
     logger.info(f"Epochs: {config.get('num_train_epochs', 2)}")
     logger.info(f"ICA Masking: ENABLED ({config.get('mask_mode', 'lesion')} mode)")

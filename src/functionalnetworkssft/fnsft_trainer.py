@@ -1937,7 +1937,19 @@ def main(log_file=None):
         # Convert to GGUF if requested
         if args.convert_to_gguf:
             gguf_output_path = os.path.join(args.output_dir, "model.gguf")
-            convert_to_gguf(final_output_dir, gguf_output_path, args.gguf_quantization)
+            # Prefer merged model for GGUF conversion when available
+            model_dir_for_gguf = final_output_dir
+            merged_dir_candidate = os.path.join(args.output_dir, "merged_model")
+            if os.path.exists(merged_dir_candidate):
+                logger.info("Using merged model directory for GGUF conversion")
+                model_dir_for_gguf = merged_dir_candidate
+            else:
+                logger.info(
+                    "Merged model directory not found; using final_model for GGUF conversion"
+                )
+            convert_to_gguf(
+                model_dir_for_gguf, gguf_output_path, args.gguf_quantization
+            )
 
         # Upload to Hugging Face Hub if requested
         if args.push_to_hub:

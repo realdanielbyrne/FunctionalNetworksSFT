@@ -91,9 +91,6 @@ class TestBuildICATemplates(unittest.TestCase):
         combined_data = DatasetLoader.load_and_sample_datasets(
             dataset_paths=[csv_path, json_path],
             samples_per_dataset=10,
-            tokenizer=mock_tokenizer,
-            max_seq_length=256,
-            template_format="auto",
         )
 
         # Should have 20 samples total (10 from each dataset)
@@ -238,13 +235,13 @@ class TestBuildICATemplates(unittest.TestCase):
 
         # Test CSV loading
         csv_data = DatasetLoader.load_and_sample_datasets(
-            dataset_paths=[csv_path], samples_per_dataset=5, tokenizer=mock_tokenizer
+            dataset_paths=[csv_path], samples_per_dataset=5
         )
         self.assertEqual(len(csv_data), 5)
 
         # Test JSON loading
         json_data = DatasetLoader.load_and_sample_datasets(
-            dataset_paths=[json_path], samples_per_dataset=5, tokenizer=mock_tokenizer
+            dataset_paths=[json_path], samples_per_dataset=5
         )
         self.assertEqual(len(json_data), 5)
 
@@ -252,7 +249,6 @@ class TestBuildICATemplates(unittest.TestCase):
         mixed_data = DatasetLoader.load_and_sample_datasets(
             dataset_paths=[csv_path, json_path],
             samples_per_dataset=5,
-            tokenizer=mock_tokenizer,
         )
         self.assertEqual(len(mixed_data), 10)
 

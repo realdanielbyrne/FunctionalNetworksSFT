@@ -70,7 +70,6 @@ def clear_cuda_memory():
         logger.debug("CUDA not available or torch not imported - skipping memory clear")
 
 
-# Configure logging
 def setup_logging(verbose=False):
     """Set up logging configuration"""
     log_level = logging.DEBUG if verbose else logging.INFO
@@ -154,6 +153,37 @@ def run_experiment_b():
         return success
     except Exception as e:
         logger.error(f"Experiment B failed: {str(e)}")
+        # Clear CUDA memory even on failure
+        clear_cuda_memory()
+        return False
+
+
+def run_experiment_c():
+    """Run Experiment C: PEFT + ICA masking fine-tuning (preserve mode)"""
+    logger = logging.getLogger(__name__)
+    logger.info("Starting Experiment C: PEFT + ICA masking fine-tuning (preserve mode)")
+
+    try:
+        # Import and run experiment C
+        sys.path.insert(
+            0,
+            str(Path(__file__).parent / "experiment_c_peft_ica_preserve" / "scripts"),
+        )
+        from run_experiment_c import run_experiment_c_preserve as run_c
+
+        start_time = time.time()
+        success = run_c()
+        end_time = time.time()
+
+        duration = end_time - start_time
+        logger.info(f"Experiment C completed in {duration:.2f} seconds")
+
+        # Clear CUDA memory after experiment
+        clear_cuda_memory()
+
+        return success
+    except Exception as e:
+        logger.error(f"Experiment C failed: {str(e)}")
         # Clear CUDA memory even on failure
         clear_cuda_memory()
         return False
@@ -344,31 +374,8 @@ def main():
         results["experiment_b"] = run_experiment_b()
 
     if args.experiment in ["c", "all"]:
-        logger.info("Running Experiment C (Preserve)...")
-        # Import and run experiment C
-        try:
-            sys.path.insert(
-                0,
-                str(
-                    Path(__file__).parent / "experiment_c_peft_ica_preserve" / "scripts"
-                ),
-            )
-            from run_experiment_c import run_experiment_c_preserve as run_c
-
-            start_time_c = time.time()
-            success_c = run_c()
-            end_time_c = time.time()
-            logger.info(
-                f"Experiment C completed in {end_time_c - start_time_c:.2f} seconds"
-            )
-            # Clear CUDA memory after experiment
-            clear_cuda_memory()
-            results["experiment_c"] = success_c
-        except Exception as e:
-            logger.error(f"Experiment C failed: {str(e)}")
-            # Clear CUDA memory even on failure
-            clear_cuda_memory()
-            results["experiment_c"] = False
+        logger.info("Running Experiment C...")
+        results["experiment_c"] = run_experiment_c()
 
     # Run evaluation if selected set completed successfully
     if (
@@ -401,6 +408,8 @@ def main():
         print("  Experiment A: experiment_a_peft_only/output/")
     if "experiment_b" in results:
         print("  Experiment B: experiment_b_peft_ica/output/")
+    if "experiment_c" in results:
+        print("  Experiment C: experiment_c_peft_ica_preserve/output/")
     if "evaluation" in results and results["evaluation"]:
         print("  Evaluation Results: evaluation_results/")
         print("  Summary Report: evaluation_results/evaluation_summary.md")

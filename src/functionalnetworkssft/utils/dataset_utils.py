@@ -31,6 +31,11 @@ class DatasetFormatter:
             ),
             "response": item["output"],
         },
+        # Input-output only (no instruction field present)
+        ("input", "output"): lambda item: {
+            "instruction": item.get("instruction", item["input"]),
+            "response": item["output"],
+        },
         # Databricks Dolly format (instruction, context, response)
         ("instruction", "context", "response"): lambda item: {
             "instruction": (
@@ -87,6 +92,11 @@ class DatasetFormatter:
             "instruction": item["message_1"],
             "response": item["message_2"],
         },
+        # Relaxed camel-ai/physics format (only message_1 and message_2 required)
+        ("message_1", "message_2"): lambda item: {
+            "instruction": item["message_1"],
+            "response": item["message_2"],
+        },
     }
 
     @staticmethod
@@ -127,6 +137,7 @@ class DatasetFormatter:
         # Check for known formats in order of preference
         format_priority = [
             ("instruction", "input", "output"),
+            ("input", "output"),
             ("instruction", "context", "response"),  # Databricks Dolly format
             ("instruction", "response"),
             ("instruction", "output"),
@@ -135,7 +146,8 @@ class DatasetFormatter:
                 "message_2",
                 "sub_topic",
                 "topic",
-            ),  # camel-ai/physics dataset format
+            ),  # Full camel-ai/physics dataset format
+            ("message_1", "message_2"),  # Relaxed camel-ai/physics
             ("assistant", "system", "user"),  # System-user-assistant format
             ("prompt", "completion"),
             ("prompt", "response"),

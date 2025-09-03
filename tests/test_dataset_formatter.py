@@ -4,6 +4,7 @@ Test suite for DatasetFormatter class.
 """
 
 import pytest
+import torch
 from src.functionalnetworkssft.utils.dataset_utils import DatasetFormatter
 from src.functionalnetworkssft.fnsft_trainer import InstructionDataset
 
@@ -16,10 +17,16 @@ class MockTokenizer:
         self.eos_token = "</s>"
         self.eos_token_id = 2
         self.pad_token_id = None
+        self.last_text = None
 
     def __call__(self, text, **kwargs):
-        # Mock tokenization - just return some dummy tokens
-        return {"input_ids": [0, 1, 2, 3, 4], "attention_mask": [1, 1, 1, 1, 1]}
+        # Capture the last text for assertions in tests
+        self.last_text = text
+        # Return tensors shaped like HF tokenizers when return_tensors='pt'
+        return {
+            "input_ids": torch.tensor([[0, 1, 2, 3, 4]], dtype=torch.long),
+            "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.long),
+        }
 
     def apply_chat_template(self, messages, **kwargs):
         # Mock chat template application
@@ -157,6 +164,15 @@ class TestDatasetFormatter:
         # Test question-answer format
         data2 = [{"question": "What is AI?", "answer": "Artificial Intelligence"}]
         assert DatasetFormatter.detect_format(data2) == ("question", "answer")
+
+        # Test question-response format (e.g., 0xZee/dataset-CoT-Atomic-Nuclear-Physics-144)
+        data2b = [{"question": "What is AI?", "response": "Artificial Intelligence"}]
+        assert DatasetFormatter.detect_format(data2b) == ("question", "response")
+        converted = DatasetFormatter.convert_to_standard_format(
+            data2b[0], ("question", "response")
+        )
+        assert converted["instruction"] == "What is AI?"
+        assert converted["response"] == "Artificial Intelligence"
 
         # Test prompt-completion format
         data3 = [{"prompt": "Complete this", "completion": "sentence"}]
@@ -378,6 +394,52 @@ class TestDatasetFormatter:
         # Verify that topic and sub_topic are not included in the converted item
         assert "topic" not in converted_item
         assert "sub_topic" not in converted_item
+
+    def test_mixed_format_per_item_fallback(self):
+        """Ensure InstructionDataset falls back to per-item detection for mixed formats.
+
+        Simulate combined datasets where the first 5 items are camel-ai/physics format,
+        so global detection picks that. Then include a sixth item with question/response
+        fields (like 0xZee's dataset) and verify __getitem__ succeeds and uses the
+        correct content.
+        """
+        tokenizer = MockTokenizer()
+
+        # First 5 items: camel-ai/physics format
+        camel_items = [
+            {
+                "message_1": f"Camel question {i}?",
+                "message_2": f"Camel answer {i}.",
+                "topic": "Physics",
+                "sub_topic": "General",
+            }
+            for i in range(5)
+        ]
+
+        # Sixth item: question/response format with extra CoT field
+        qr_item = {
+            "question": "What is the atomic number of oxygen?",
+            "response": "The atomic number of oxygen is 8.",
+            "CoT": "Reason it out...",
+        }
+
+        data = camel_items + [qr_item]
+
+        # Create dataset (auto_detect_format will detect based on first 5 items)
+        dataset = InstructionDataset(
+            data=data,
+            tokenizer=tokenizer,
+            template_format="basic",
+            auto_detect_format=True,
+            max_length=128,
+        )
+
+        # Access the last item (question/response) - should not raise and should format text
+        item = dataset.__getitem__(5)
+        assert "oxygen" in tokenizer.last_text
+        assert "atomic number" in tokenizer.last_text
+        # Ensure labels/ids are present
+        assert "input_ids" in item and "attention_mask" in item and "labels" in item
 
 
 if __name__ == "__main__":

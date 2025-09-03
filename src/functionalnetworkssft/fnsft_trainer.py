@@ -252,7 +252,12 @@ from .utils.model_utils import (
 
 # Import new modular utilities
 from .utils.hf_utilities import upload_to_hub
-from .ica_mask import ICAMask
+
+# Lazy import ICAMask to avoid heavy dependencies during import (e.g., in tests)
+try:
+    from .ica_mask import ICAMask  # type: ignore
+except Exception:  # pragma: no cover - only exercised when sklearn is unavailable
+    ICAMask = None  # type: ignore
 
 
 class InstructionDataset(Dataset):
@@ -362,10 +367,20 @@ class InstructionDataset(Dataset):
                     item, self.detected_format
                 )
             except Exception as e:
-                logger.warning(
-                    f"Failed to convert item {idx}: {e}. Using original format."
+                logger.debug(
+                    f"Failed to convert item {idx}: {e}. Attempting per-item format detection."
                 )
-                converted_item = item
+                # Fallback: try to detect/convert format for this specific item
+                try:
+                    item_format = DatasetFormatter.detect_format([item])
+                    converted_item = DatasetFormatter.convert_to_standard_format(
+                        item, item_format
+                    )
+                except Exception as e2:
+                    logger.debug(
+                        f"Per-item detection failed for item {idx}: {e2}. Using original format."
+                    )
+                    converted_item = item
         else:
             converted_item = item
 
@@ -557,7 +572,17 @@ def create_pretokenization_function(
                     item, detected_format
                 )
             except Exception:
-                converted_item = item
+                # Fallback: try per-item detection
+                try:
+                    item_format = DatasetFormatter.detect_format([item])
+                    converted_item = DatasetFormatter.convert_to_standard_format(
+                        item, item_format
+                    )
+                except Exception:
+                    logger.debug(
+                        "Pretokenize per-item detection failed; using original format."
+                    )
+                    converted_item = item
         else:
             converted_item = item
 
@@ -1709,6 +1734,10 @@ def main(log_file=None):
         mask_handles = []
         if args.mask_mode is not None:
             # Initialize ICA mask handler
+            if ICAMask is None:
+                raise ImportError(
+                    "ICAMask is not available. Please install scikit-learn to enable mask features."
+                )
             ica_mask = ICAMask(
                 num_components=args.ica_components,
                 percentile=args.ica_percentile,

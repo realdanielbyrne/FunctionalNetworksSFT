@@ -64,7 +64,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from torch.utils.data import Subset
 
 # Import from the same package
-from .ica_mask import ICAMask
+# Lazy import to avoid heavy deps when used for tests or utility imports
+try:
+    from .ica_mask import ICAMask  # type: ignore
+except Exception:  # pragma: no cover
+    ICAMask = None  # type: ignore
 from .utils.model_utils import load_dataset_from_path
 from .fnsft_trainer import InstructionDataset
 from .utils.dataset_utils import DatasetFormatter
@@ -140,21 +144,64 @@ class DatasetLoader:
             try:
                 # Load dataset using existing utility
                 data = load_dataset_from_path(dataset_path)
-                logger.info(f"Loaded {len(data)} examples from {dataset_path}")
+                logger.info(
+                    f"[{dataset_display_name(dataset_path)}] Loaded {len(data)} examples"
+                )
 
-                # Sample specified number of examples
+                # Detect and convert each dataset to a standard format up-front to avoid
+                # mixed-format issues later. We detect on the dataset's own first items.
+                try:
+                    detected = DatasetFormatter.detect_format(
+                        data[:5] if len(data) > 5 else data
+                    )
+                    logger.debug(
+                        f"[{dataset_display_name(dataset_path)}] Detected format: {detected}"
+                    )
+                    converted_data = []
+                    failures = 0
+                    for i, item in enumerate(data):
+                        try:
+                            converted = DatasetFormatter.convert_to_standard_format(
+                                item, detected
+                            )
+                        except Exception:
+                            # As a secondary fallback, try per-item detection once
+                            try:
+                                fmt = DatasetFormatter.detect_format([item])
+                                converted = DatasetFormatter.convert_to_standard_format(
+                                    item, fmt
+                                )
+                            except Exception:
+                                failures += 1
+                                continue
+                        converted_data.append(converted)
+                    if failures:
+                        logger.info(
+                            f"[{dataset_display_name(dataset_path)}] Converted {len(converted_data)} items; skipped {failures} items"
+                        )
+                    else:
+                        logger.info(
+                            f"[{dataset_display_name(dataset_path)}] Converted {len(converted_data)} items; no skips"
+                        )
+                    data = converted_data
+                except Exception as e:
+                    logger.info(
+                        f"[{dataset_display_name(dataset_path)}] Detection failed; proceeding with raw items ({e})"
+                    )
+
+                # Sample specified number of examples from the now-standardized data
                 if len(data) > samples_per_dataset:
                     sampled_indices = random.sample(
                         range(len(data)), samples_per_dataset
                     )
                     sampled_data = [data[i] for i in sampled_indices]
                     logger.info(
-                        f"Sampled {len(sampled_data)} examples from {dataset_path}"
+                        f"[{dataset_display_name(dataset_path)}] Sampled {len(sampled_data)} examples"
                     )
                 else:
                     sampled_data = data
                     logger.info(
-                        f"Using all {len(sampled_data)} examples from {dataset_path} (less than requested)"
+                        f"[{dataset_display_name(dataset_path)}] Using all {len(sampled_data)} examples (<= requested)"
                     )
 
                 combined_data.extend(sampled_data)
@@ -261,6 +308,10 @@ def build_ica_templates(
 
     # Initialize ICA mask handler
     logger.info("Initializing ICA mask handler...")
+    if ICAMask is None:
+        raise ImportError(
+            "ICAMask is not available. Please install scikit-learn to enable template building."
+        )
     ica_mask = ICAMask(
         num_components=ica_components,
         percentile=ica_percentile,

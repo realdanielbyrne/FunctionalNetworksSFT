@@ -60,6 +60,11 @@ class DatasetFormatter:
             "instruction": item["question"],
             "response": item["answer"],
         },
+        # Question-response format (e.g., 0xZee/dataset-CoT-Atomic-Nuclear-Physics-144)
+        ("question", "response"): lambda item: {
+            "instruction": item["question"],
+            "response": item["response"],
+        },
         # Context-response formats (common in some datasets)
         ("context", "response"): lambda item: {
             "instruction": item["context"],
@@ -135,6 +140,7 @@ class DatasetFormatter:
             ("prompt", "completion"),
             ("prompt", "response"),
             ("question", "answer"),
+            ("question", "response"),
             ("context", "response"),  # Context-response format
             ("Context", "Response"),  # Context-Response format (capitalized)
             ("context", "question", "answer"),

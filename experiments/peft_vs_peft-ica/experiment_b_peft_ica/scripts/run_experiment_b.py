@@ -178,9 +178,6 @@ if __name__ == "__main__":
     if success:
         print("\n" + "=" * 80)
         print("EXPERIMENT B COMPLETED SUCCESSFULLY!")
-        print("=" * 80)
-        print("Results saved to:")
-        print("  . experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/")
 
         # Load config to show which components were used
         config_path = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml"
@@ -200,11 +197,6 @@ if __name__ == "__main__":
         print("=" * 80)
     else:
         print("\n" + "=" * 80)
-        print("x EXPERIMENT B FAILED!")
-        print("=" * 80)
-        print("Check the following log files for details:")
-        print(
-            "  . experiments/peft_vs_peft-ica/experiment_b_peft_ica/output/experiment_b.log"
-        )
+        print("!!! EXPERIMENT B FAILED!")
         print("=" * 80)
         sys.exit(1)

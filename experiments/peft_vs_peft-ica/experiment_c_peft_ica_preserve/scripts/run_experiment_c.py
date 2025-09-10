@@ -172,9 +172,9 @@ def run_experiment_c_preserve():
     logger.info("EXPERIMENT C (PRESERVE) SUMMARY")
     logger.info("=" * 80)
     if success:
-        logger.info("✓ Experiment completed successfully")
+        logger.info("Experiment completed successfully")
     else:
-        logger.error("✗ Experiment failed")
+        logger.error("!!! Experiment failed")
     logger.info("=" * 80)
 
     return success
@@ -184,10 +184,8 @@ if __name__ == "__main__":
     success = run_experiment_c_preserve()
     if success:
         print("\n" + "=" * 80)
-        print("🎉 EXPERIMENT C (PRESERVE) COMPLETED SUCCESSFULLY!")
+        print("EXPERIMENT C (PRESERVE) COMPLETED SUCCESSFULLY!")
         print("=" * 80)
-        print("Results saved to:")
-        print("  • experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/")
 
         # Load config to show which components were used
         config_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/experiment_c_config.yaml"
@@ -197,7 +195,7 @@ if __name__ == "__main__":
             component_ids = config.get("ica_component_ids", [0, 1])
             components_str = ",".join(map(str, component_ids))
             print(f"\nConfiguration completed:")
-            print(f"  ✓ Components [{components_str}] preserved in preserve mode")
+            print(f"  Components [{components_str}] preserved in preserve mode")
         except Exception as e:
             print(f"\nNote: Could not read component configuration: {e}")
 
@@ -207,11 +205,6 @@ if __name__ == "__main__":
         print("=" * 80)
     else:
         print("\n" + "=" * 80)
-        print("❌ EXPERIMENT C (PRESERVE) FAILED!")
-        print("=" * 80)
-        print("Check the following log files for details:")
-        print(
-            "  • experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/experiment_c_preserve.log"
-        )
-        print("=" * 80)
+        print("!!EXPERIMENT C (PRESERVE) FAILED!")
+
         sys.exit(1)

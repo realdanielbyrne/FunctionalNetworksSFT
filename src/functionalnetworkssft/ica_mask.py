@@ -6,6 +6,24 @@ Refactored to add a global (group-wise) ICA over concatenated final MLP outputs
 and component-wise masking at the MLP output, while preserving the original
 per-layer ICA over FFN intermediate activations.
 
+
+Their was a LAPACK integer overflow error when FastICA tried to process a matrix with over 4 billion elements (46974 × 86016).
+The matrix was too large for LAPACK's internal integer indexing limits. The error message suggested using numpy.linalg.svd instead,
+which pointed to a dimensionality reduction solution.
+Implemented PCA preprocessing to reduce the dimensionality before applying ICA, which maintains the essential information while
+making the computation feasible.
+
+Changes Made
+Added PCA import to ica_mask.py
+Added max_pca_components parameter to the ICAMask class constructor (default: 1000)
+Implemented automatic dimensionality reduction that:
+Detects when matrices exceed LAPACK limits (2³¹-1 elements)
+Applies PCA preprocessing to reduce dimensions to a manageable size
+Transforms ICA results back to original space
+Logs the process for transparency
+Updated command-line interface to accept --max_pca_components parameter
+Updated function signatures throughout the codebase
+
 Author: Daniel Byrne
 License: MIT
 """

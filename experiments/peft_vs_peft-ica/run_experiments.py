@@ -36,7 +36,6 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 
-# Import torch for CUDA memory management
 try:
     import torch
 except ImportError:
@@ -47,24 +46,9 @@ def clear_cuda_memory():
     """Clear CUDA memory cache to free up GPU memory between experiments."""
     if torch is not None and torch.cuda.is_available():
         logger = logging.getLogger(__name__)
-
-        # Get memory info before clearing
-        allocated_before = torch.cuda.memory_allocated() / 1024**2  # MB
-        reserved_before = torch.cuda.memory_reserved() / 1024**2  # MB
-
-        # Clear memory
         torch.cuda.empty_cache()
-
-        # Get memory info after clearing
-        allocated_after = torch.cuda.memory_allocated() / 1024**2  # MB
-        reserved_after = torch.cuda.memory_reserved() / 1024**2  # MB
-
         logger.info(f"CUDA memory cleared:")
-        logger.info(
-            f"  Allocated: {allocated_before:.1f} MB -> {allocated_after:.1f} MB"
-        )
-        logger.info(f"  Reserved: {reserved_before:.1f} MB -> {reserved_after:.1f} MB")
-        logger.info(f"  Freed: {(reserved_before - reserved_after):.1f} MB")
+
     else:
         logger = logging.getLogger(__name__)
         logger.debug("CUDA not available or torch not imported - skipping memory clear")
@@ -269,33 +253,26 @@ def print_experiment_summary():
     print("FINE-TUNING EXPERIMENT COMPARISON")
     print("=" * 80)
     print(f"Model: {config_b.get('model_name_or_path', '[CONFIG NOT LOADED]')}")
+    print(f"Dataset: {config_b.get('dataset_name_or_path', '[CONFIG NOT LOADED]')}")
     print(
-        f"Dataset: {config_b.get('dataset_name_or_path', '[CONFIG NOT LOADED]')} (3,512 Context-Response pairs)"
+        f"Training Epochs: {config_b.get('num_train_epochs', '[CONFIG NOT LOADED]')}\n"
     )
-    print(f"Training Epochs: {config_b.get('num_train_epochs', '[CONFIG NOT LOADED]')}")
-    print()
     print("Data Preprocessing:")
     print("  - Context field length filter: ≤ 1500 characters")
     print("  - Response field length filter: ≤ 4000 characters")
-    print("  - Applied consistently to both experiments for fair comparison")
-    print()
+    print("  - Applied consistently to both experiments for fair comparison\n")
     print("Experiment A: PEFT (LoRA) only")
     print(f"  - LoRA rank: {config_a.get('lora_r', '[CONFIG NOT LOADED]')}")
     print(f"  - LoRA alpha: {config_a.get('lora_alpha', '[CONFIG NOT LOADED]')}")
-    print(f"  - LoRA dropout: {config_a.get('lora_dropout', '[CONFIG NOT LOADED]')}")
     print(
-        f"  - ICA masking: {'DISABLED' if config_a.get('mask_mode') is None else 'ENABLED'}"
+        f"  - ICA masking:{'DISABLED' if config_a.get('mask_mode') is None else 'ENABLED'}\n"
     )
-    print()
     print("Experiment B: PEFT (LoRA) + ICA masking")
     print(
         f"  - LoRA rank: {config_b.get('lora_r', '[CONFIG NOT LOADED]')} (identical to A)"
     )
     print(
         f"  - LoRA alpha: {config_b.get('lora_alpha', '[CONFIG NOT LOADED]')} (identical to A)"
-    )
-    print(
-        f"  - LoRA dropout: {config_b.get('lora_dropout', '[CONFIG NOT LOADED]')} (identical to A)"
     )
 
     mask_mode = config_b.get("mask_mode", "[CONFIG NOT LOADED]")
@@ -317,9 +294,6 @@ def print_experiment_summary():
     )
     print(
         f"  - LoRA alpha: {config_c.get('lora_alpha', '[CONFIG NOT LOADED]')} (identical to A/B)"
-    )
-    print(
-        f"  - LoRA dropout: {config_c.get('lora_dropout', '[CONFIG NOT LOADED]')} (identical to A/B)"
     )
 
     mask_mode_c = config_c.get("mask_mode", "[CONFIG NOT LOADED]")

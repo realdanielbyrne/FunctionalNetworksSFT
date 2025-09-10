@@ -91,16 +91,7 @@ def run_experiment_a():
 if __name__ == "__main__":
     success = run_experiment_a()
     if success:
-        print("\n✅ Experiment A completed successfully!")
-        print(
-            "📁 Check experiments/peft_vs_peft-ica/experiment_a_peft_only/output/ for results"
-        )
-        print("\n💡 To run evaluation comparing both models, use:")
-        print("   python experiments/peft_vs_peft-ica/evaluate_models.py")
-        print("   (Note: Both experiments A and B must be completed first)")
+        print("\nExperiment A completed successfully!")
     else:
-        print("\n❌ Experiment A failed!")
-        print(
-            "📋 Check experiments/peft_vs_peft-ica/experiment_a_peft_only/output/experiment_a.log for details"
-        )
+        print("\n!!! Experiment A failed!")
         sys.exit(1)

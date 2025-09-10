@@ -1732,6 +1732,10 @@ def main(log_file=None):
         )
 
         mask_handles = []
+        # Track union of selected channels per layer and applied mask mode for static estimates
+        mask_union: Dict[str, List[int]] = {}
+        applied_mask_mode: Optional[str] = None
+
         if args.mask_mode is not None:
             # Initialize ICA mask handler
             if ICAMask is None:
@@ -1873,9 +1877,22 @@ def main(log_file=None):
                         lid: len(chs)
                         for lid, chs in ica_mask.mask_dict_components[cid].items()
                     }
+
                     logger.info(
                         f"  • comp {cid}: {sum(layer_counts.values())} channels across {len(layer_counts)} layers"
                     )
+
+                # Build union of selected channels across components for static estimates
+                from collections import defaultdict as _dd
+
+                _union_sets = _dd(set)
+                for cid in comp_ids:
+                    comp = ica_mask.mask_dict_components.get(cid, {})
+                    for layer, chans in comp.items():
+                        for ch in chans:
+                            _union_sets[layer].add(ch)
+                mask_union = {k: sorted(v) for k, v in _union_sets.items()}
+                applied_mask_mode = global_mode
 
                 mask_handles = ica_mask.apply_component_masks(
                     model=model,
@@ -1906,9 +1923,102 @@ def main(log_file=None):
             checkpoint = args.resume_from_checkpoint
             logger.info(f"Resuming training from checkpoint: {checkpoint}")
 
+        # Static estimate of masked trainable parameters (LoRA down_proj rows)
+        def _estimate_masked_params_for_lora_down_proj(
+            model, mask_union, mask_mode
+        ) -> int:
+            """Estimate count of trainable params that are effectively masked by output channel masking.
+            - For PEFT: counts rows in lora_B of mlp.down_proj corresponding to masked output channels.
+            - For full FT (no PEFT): counts rows in base down_proj weight if trainable.
+            """
+            total = 0
+            try:
+                # Unwrap PEFT to get base model for MLP discovery
+                actual_model = model
+                if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+                    actual_model = model.base_model.model
+                elif hasattr(model, "base_model"):
+                    actual_model = model.base_model
+
+                # Use ICAMask helper to find MLPs if available
+                mlps = None
+                try:
+                    blocks, mlps = ica_mask._find_decoder_blocks_and_mlps(actual_model)  # type: ignore[attr-defined]
+                except Exception:
+                    mlps = None
+
+                hidden_size = (
+                    getattr(model.config, "hidden_size", None)
+                    or getattr(model.config, "n_embd", None)
+                    or getattr(model.config, "d_model", None)
+                )
+                if hidden_size is None or not mlps:
+                    return 0
+
+                for i, mlp in enumerate(mlps):
+                    if mlp is None:
+                        continue
+                    chans = (
+                        mask_union.get(str(i), [])
+                        if isinstance(mask_union, dict)
+                        else []
+                    )
+                    masked_rows = (
+                        (hidden_size - len(chans))
+                        if mask_mode == "preserve"
+                        else len(chans)
+                    )
+                    if masked_rows <= 0:
+                        continue
+
+                    dp = getattr(mlp, "down_proj", None)
+                    if dp is None:
+                        continue
+
+                    # Prefer LoRA B matrices if present
+                    lora_B = getattr(dp, "lora_B", None)
+                    if lora_B:
+                        for _, module in lora_B.items():
+                            w = getattr(module, "weight", None)
+                            if w is None or w.ndim != 2:
+                                continue
+                            dim0, dim1 = w.shape
+                            out_features = getattr(dp, "out_features", hidden_size)
+                            if dim0 == hidden_size or dim0 == out_features:
+                                r = dim1
+                                total += masked_rows * r
+                            elif dim1 == hidden_size or dim1 == out_features:
+                                r = dim0
+                                total += masked_rows * r
+                    else:
+                        # If base layer is trainable, estimate masked rows on base weight
+                        w = getattr(dp, "weight", None)
+                        if (
+                            w is not None
+                            and getattr(w, "requires_grad", False)
+                            and w.ndim == 2
+                        ):
+                            out_dim, in_dim = w.shape
+                            if out_dim == hidden_size:
+                                total += masked_rows * in_dim
+                return int(total)
+            except Exception:
+                return 0
+
         # Log trainable parameters count
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         logger.info(f"Trainable parameters: {trainable_params:,}")
+
+        # Also log a static estimate adjusted by masked output channels (LoRA down_proj rows)
+        if applied_mask_mode in ("lesion", "preserve") and mask_union:
+            masked_params_est = _estimate_masked_params_for_lora_down_proj(
+                model, mask_union, applied_mask_mode
+            )
+            effective_trainable = max(0, trainable_params - masked_params_est)
+            logger.info(
+                f"Effective trainable parameters (static est.): {effective_trainable:,} "
+                f"[= {trainable_params:,} - masked {masked_params_est:,}]"
+            )
 
         # Start training
         logger.info("Starting training...")

@@ -90,21 +90,6 @@ def run_single_experiment(config):
     logger.info(f"EXPERIMENT C (PRESERVE): COMPONENTS [{components_str}] PRESERVED")
     logger.info("=" * 80)
 
-    logger.info(
-        f"Model: {config.get('model_name_or_path', 'meta-llama/Llama-3.2-1B-Instruct')}"
-    )
-    logger.info(
-        f"Dataset: {config.get('dataset_name_or_path', 'databricks/databricks-dolly-15k')}"
-    )
-    logger.info("Method: PEFT (LoRA) + ICA masking")
-    logger.info(f"Epochs: {config.get('num_train_epochs', 2)}")
-    logger.info(f"ICA Masking: ENABLED ({config.get('mask_mode', 'preserve')} mode)")
-    logger.info(f"ICA Components: {config.get('ica_components', 10)}")
-    logger.info(f"ICA Percentile: {config.get('ica_percentile', 98.0)}")
-    logger.info(f"Preserved Component IDs: {component_ids}")
-    logger.info(f"Output Directory: {config.get('output_dir')}")
-    logger.info("=" * 80)
-
     # Create temporary config file with updated names
     temp_config_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/temp_config.yaml"
     with open(temp_config_path, "w") as f:
@@ -158,11 +143,7 @@ def run_experiment_c_preserve():
     component_ids = config.get("ica_component_ids", [0, 1])
     components_str = ",".join(map(str, component_ids))
 
-    logger.info("=" * 80)
-    logger.info("EXPERIMENT C (PRESERVE): PEFT + ICA MASKING FINE-TUNING")
-    logger.info("=" * 80)
     logger.info(f"Components to preserve: [{components_str}]")
-    logger.info("=" * 80)
 
     # Run the experiment
     success = run_single_experiment(config)

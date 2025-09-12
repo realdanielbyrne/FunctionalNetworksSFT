@@ -26,7 +26,6 @@ License: MIT
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -55,7 +54,6 @@ from transformers.modeling_utils import PreTrainedModel
 from datasets import load_dataset, Dataset as HFDataset, load_from_disk
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
 import wandb
-from tqdm.auto import tqdm
 
 # Import whoami at module level for testing
 try:
@@ -63,77 +61,66 @@ try:
 except ImportError:
     whoami = None
 
-# ===================== Legacy ICA helpers (for backward compatibility) =====================
-import numpy as np
-import json
-
-
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-# Configure logging only if not already configured
-def setup_logging(log_file="sft_training.log"):
-    """Set up logging configuration if not already configured."""
-    root_logger = logging.getLogger()
+# ======================== Logging ========================
 
-    # Check if logging is already configured (has handlers)
-    if root_logger.handlers:
-        # Logging already configured, just get our logger
-        return logging.getLogger(__name__)
 
-    # Configure logging for the first time
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
+def setup_logging(log_file: Optional[str] = "sft_training.log") -> logging.Logger:
+    """Set up root logging (idempotent)."""
+    root = logging.getLogger()
+    if not root.handlers:
+        level = os.getenv("SFT_LOG_LEVEL", "INFO").upper()
+        handlers = [logging.StreamHandler(sys.stdout)]
+        if log_file:
+            handlers.append(logging.FileHandler(log_file))
+        logging.basicConfig(
+            level=getattr(logging, level, logging.INFO),
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=handlers,
+        )
     return logging.getLogger(__name__)
 
 
 logger = setup_logging()
 
 
-def load_env_file():
-    """Load environment variables from .env file if it exists."""
-    env_file = Path(".env")
-    if env_file.exists():
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    # Remove quotes if present
-                    value = value.strip('"').strip("'")
-                    os.environ[key] = value
-    else:
-        logger.debug("No .env file found")
+# Log-once guard for template format messages
+_TEMPLATE_DECISION_LOGGED = False
+
+
+def load_env_file() -> None:
+    """Load env vars from .env if present."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ[k] = v.strip().strip('"').strip("'")
 
 
 @dataclass
 class ModelArguments:
-    """Arguments for model configuration."""
-
     model_name_or_path: str = field(
-        metadata={
-            "help": "Path to pretrained model or model identifier from huggingface.co/models"
-        }
+        metadata={"help": "Path to pretrained model or model identifier"}
     )
     use_auth_token: bool = field(
-        default=True,
-        metadata={"help": "Use HuggingFace auth token for private models"},
+        default=True, metadata={"help": "Use HF auth token for private models"}
     )
     trust_remote_code: bool = field(
-        default=True, metadata={"help": "Trust remote code when loading model"}
+        default=True, metadata={"help": "Trust remote code"}
     )
     torch_dtype: str = field(
         default="auto",
-        metadata={
-            "help": "Torch dtype for model loading (auto, float16, bfloat16, float32)"
-        },
+        metadata={"help": "auto, float16, bfloat16, float32"},
+    )
+    attn_implementation: str = field(
+        default="auto",
+        metadata={"help": "auto, eager, sdpa, flash_attention_2"},
     )
     attn_implementation: str = field(
         default="auto",
@@ -145,112 +132,59 @@ class ModelArguments:
 
 @dataclass
 class DataArguments:
-    """Arguments for data configuration."""
-
     dataset_name_or_path: str = field(
-        metadata={"help": "Path to dataset file or HuggingFace dataset name"}
+        metadata={"help": "Path to dataset file or HF dataset name"}
     )
-    dataset_config_name: Optional[str] = field(
-        default=None, metadata={"help": "Configuration name for HuggingFace dataset"}
-    )
-    max_seq_length: int = field(
-        default=2048, metadata={"help": "Maximum sequence length for tokenization"}
-    )
+    dataset_config_name: Optional[str] = field(default=None)
+    max_seq_length: int = field(default=2048)
     instruction_template: str = field(
-        default="### Instruction:\n{instruction}\n\n### Response:\n{response}",
-        metadata={"help": "Template for formatting instruction-response pairs"},
+        default="### Instruction:\n{instruction}\n\n### Response:\n{response}"
     )
-    validation_split: float = field(
-        default=0.1, metadata={"help": "Fraction of data to use for validation"}
-    )
-    use_existing_splits: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to use existing validation/test splits from HuggingFace datasets"
-        },
-    )
-    auto_detect_format: bool = field(
-        default=True,
-        metadata={"help": "Automatically detect and convert dataset format"},
-    )
-    template_format: str = field(
-        default="auto",
-        metadata={"help": "Template format to use: auto, chat, alpaca, chatml, basic"},
-    )
-    # Dataset preprocessing parameters
-    response_max_length: int = field(
-        default=4000,
-        metadata={
-            "help": "Maximum allowed length for response field during preprocessing"
-        },
-    )
-    instruction_max_length: int = field(
-        default=2048,
-        metadata={
-            "help": "Maximum allowed length for combined instruction (including context) during preprocessing"
-        },
-    )
+    validation_split: float = field(default=0.1)
+    use_existing_splits: bool = field(default=True)
+    auto_detect_format: bool = field(default=True)
+    template_format: str = field(default="auto")  # auto, chat, alpaca, chatml, basic
+    response_max_length: int = field(default=4000)
+    instruction_max_length: int = field(default=2048)
 
 
 @dataclass
 class QuantizationArguments:
-    """Arguments for quantization configuration."""
-
-    use_4bit: bool = field(default=True, metadata={"help": "Use 4-bit quantization"})
-    use_8bit: bool = field(
-        default=False,
-        metadata={"help": "Use 8-bit quantization (overrides 4-bit if True)"},
-    )
-    bnb_4bit_compute_dtype: str = field(
-        default="float16", metadata={"help": "Compute dtype for 4-bit quantization"}
-    )
-    bnb_4bit_quant_type: str = field(
-        default="nf4", metadata={"help": "Quantization type for 4-bit (nf4, fp4)"}
-    )
-    bnb_4bit_use_double_quant: bool = field(
-        default=True, metadata={"help": "Use double quantization for 4-bit"}
-    )
+    use_4bit: bool = field(default=False)
+    use_8bit: bool = field(default=True)
+    bnb_4bit_compute_dtype: str = field(default="float16")
+    bnb_4bit_quant_type: str = field(default="nf4")  # nf4, fp4
+    bnb_4bit_use_double_quant: bool = field(default=True)
 
 
 @dataclass
 class LoRAArguments:
-    """Arguments for LoRA configuration."""
-
-    use_peft: bool = field(
-        default=True,
-        metadata={
-            "help": "Use Parameter-Efficient Fine-Tuning (LoRA/QLoRA). If False, performs full parameter fine-tuning."
-        },
-    )
-    lora_r: int = field(default=16, metadata={"help": "LoRA rank"})
-    lora_alpha: int = field(default=32, metadata={"help": "LoRA alpha parameter"})
-    lora_dropout: float = field(default=0.1, metadata={"help": "LoRA dropout"})
-    lora_target_modules: Optional[List[str]] = field(
-        default=None,
-        metadata={"help": "Target modules for LoRA (auto-detected if None)"},
-    )
-    lora_bias: Literal["none", "all", "lora_only"] = field(
-        default="none", metadata={"help": "LoRA bias type (none, all, lora_only)"}
-    )
+    use_peft: bool = field(default=True)
+    lora_r: int = field(default=16)
+    lora_alpha: int = field(default=32)
+    lora_dropout: float = field(default=0.1)
+    lora_target_modules: Optional[List[str]] = field(default=None)
+    lora_bias: Literal["none", "all", "lora_only"] = field(default="none")
 
 
-# Import shared utilities
-from .utils.dataset_utils import DatasetFormatter
+# ======================== Utilities from local modules ========================
+from .utils.dataset_utils import DatasetFormatter, InstructionDataset
 from .utils.model_utils import (
+    convert_to_gguf,
     get_optimal_device,
     get_recommended_dtype,
     is_quantization_supported,
-    load_quantization_config,
-    setup_lora,
     load_dataset_from_path,
     load_dataset_with_splits,
-    split_dataset,
+    load_quantization_config,
+    merge_adapter_with_base_model,
     prepare_train_val_splits,
+    preprocess_dataset_for_experiments,
     save_model_and_tokenizer,
-    convert_to_gguf,
+    setup_lora,
+    split_dataset,
 )
 
-# Import new modular utilities
 from .utils.hf_utilities import upload_to_hub
 
 # Lazy import ICAMask to avoid heavy dependencies during import (e.g., in tests)
@@ -260,215 +194,8 @@ except Exception:  # pragma: no cover - only exercised when sklearn is unavailab
     ICAMask = None  # type: ignore
 
 
-class InstructionDataset(Dataset):
-    """Enhanced dataset class for instruction-following data with intelligent chat template handling."""
-
-    def __init__(
-        self,
-        data: List[Dict[str, Any]],
-        tokenizer: PreTrainedTokenizerBase,
-        max_length: int = 2048,
-        instruction_template: str = "### Instruction:\n{instruction}\n\n### Response:\n{response}",
-        auto_detect_format: bool = True,
-        is_pretokenized: bool = False,
-        template_format: str = "auto",
-        detected_format: Optional[tuple] = None,
-    ):
-        self.data = data
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.is_pretokenized = is_pretokenized
-        self.instruction_template = instruction_template
-        self.auto_detect_format = auto_detect_format
-        self.template_format = template_format
-
-        # Set pad token if not exists
-        if getattr(tokenizer, "pad_token", None) is None:
-            eos_token = getattr(tokenizer, "eos_token", None)
-            if eos_token is not None:
-                tokenizer.pad_token = eos_token
-                # Also set pad_token_id to ensure consistency
-                if (
-                    not hasattr(tokenizer, "pad_token_id")
-                    or tokenizer.pad_token_id is None
-                ):
-                    tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
-
-        # Determine the actual template format to use
-        self.actual_template_format = self._determine_template_format()
-        logger.info(f"Using template format: {self.actual_template_format}")
-
-        # Use provided detected format or detect it if not provided
-        if detected_format is not None:
-            # Use the pre-detected format to avoid duplicate detection/logging
-            self.detected_format = detected_format
-        elif self.auto_detect_format and data:
-            # Only detect format if not already provided
-            self.detected_format = DatasetFormatter.detect_format(data)
-            logger.info(f"Detected dataset format: {self.detected_format}")
-        else:
-            self.detected_format = None
-
-    def _determine_template_format(self) -> str:
-        """Determine the actual template format to use based on the template_format setting."""
-        if self.template_format == "auto":
-            # Check if tokenizer has a chat template
-            if (
-                hasattr(self.tokenizer, "chat_template")
-                and self.tokenizer.chat_template is not None
-            ):
-                logger.info(
-                    "Auto-detected tokenizer chat template, using 'chat' format"
-                )
-                return "chat"
-            else:
-                logger.info(
-                    "No tokenizer chat template found, falling back to 'basic' format"
-                )
-                return "basic"
-        elif self.template_format == "chat":
-            # Force use of chat template
-            if (
-                not hasattr(self.tokenizer, "chat_template")
-                or self.tokenizer.chat_template is None
-            ):
-                raise ValueError(
-                    "Chat template format requested but tokenizer does not have a chat_template attribute"
-                )
-            return "chat"
-        elif self.template_format in ["alpaca", "chatml", "basic"]:
-            return self.template_format
-        else:
-            raise ValueError(
-                f"Invalid template_format: {self.template_format}. "
-                f"Must be one of: auto, chat, alpaca, chatml, basic"
-            )
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        item = self.data[idx]
-
-        # If pre-tokenized, return the tokenized data directly
-        if self.is_pretokenized:
-            return {
-                "input_ids": torch.tensor(item["input_ids"], dtype=torch.long),
-                "attention_mask": torch.tensor(
-                    item["attention_mask"], dtype=torch.long
-                ),
-                "labels": torch.tensor(item["labels"], dtype=torch.long),
-            }
-
-        # Convert to standard format if auto-detection is enabled
-        if self.auto_detect_format and self.detected_format:
-            try:
-                converted_item = DatasetFormatter.convert_to_standard_format(
-                    item, self.detected_format
-                )
-            except Exception as e:
-                logger.debug(
-                    f"Failed to convert item {idx}: {e}. Attempting per-item format detection."
-                )
-                # Fallback: try to detect/convert format for this specific item
-                try:
-                    item_format = DatasetFormatter.detect_format([item])
-                    converted_item = DatasetFormatter.convert_to_standard_format(
-                        item, item_format
-                    )
-                except Exception as e2:
-                    logger.debug(
-                        f"Per-item detection failed for item {idx}: {e2}. Using original format."
-                    )
-                    converted_item = item
-        else:
-            converted_item = item
-
-        # Extract instruction and response
-        instruction = None
-        response = None
-
-        if "instruction" in converted_item and "response" in converted_item:
-            instruction = converted_item["instruction"]
-            response = converted_item["response"]
-        elif "text" in converted_item:
-            # If we have pre-formatted text, use it directly
-            text = converted_item["text"]
-        else:
-            # Fallback for legacy behavior
-            if "instruction" in item and "response" in item:
-                instruction = item["instruction"]
-                response = item["response"]
-            elif "text" in item:
-                text = item["text"]
-            else:
-                raise ValueError(
-                    f"Dataset item {idx} must contain either 'instruction'+'response' or 'text' fields. "
-                    f"Available keys: {list(item.keys())}"
-                )
-
-        # Format the text based on the template format
-        if instruction is not None and response is not None:
-            text = self._format_text(instruction, response)
-        # If text is already set from above, use it as-is
-
-        # Tokenize with dynamic padding (collator will pad to batch max length)
-        encoding = self.tokenizer.__call__(
-            text,
-            truncation=True,
-            padding=False,  # dynamic padding handled by data collator
-            max_length=self.max_length,
-            return_tensors="pt",
-        )
-        input_ids = encoding["input_ids"].squeeze(0)
-        attention_mask = encoding["attention_mask"].squeeze(0)
-
-        # Create labels with padding tokens set to -100 to ignore them in loss calculation
-        labels = input_ids.clone()
-        if self.tokenizer.pad_token_id is not None:
-            labels[labels == self.tokenizer.pad_token_id] = -100
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-        }
-
-    def _format_text(self, instruction: str, response: str) -> str:
-        """Format instruction and response using the appropriate template."""
-        if self.actual_template_format == "chat":
-            # Use tokenizer's chat template
-            messages = [
-                {"role": "user", "content": instruction},
-                {"role": "assistant", "content": response},
-            ]
-            formatted = self.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
-            )
-            # Ensure we return a string
-            if isinstance(formatted, str):
-                return formatted
-            else:
-                raise ValueError(
-                    f"Chat template returned non-string type: {type(formatted)}"
-                )
-        elif self.actual_template_format == "alpaca":
-            # Alpaca format
-            return f"### Instruction:\n{instruction}\n\n### Response:\n{response}"
-        elif self.actual_template_format == "chatml":
-            # ChatML format
-            return f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>"
-        elif self.actual_template_format == "basic":
-            # Use the provided instruction template
-            return self.instruction_template.format(
-                instruction=instruction, response=response
-            )
-        else:
-            raise ValueError(f"Unknown template format: {self.actual_template_format}")
-
-
 class DataCollatorForCausalLMWithPadding:
-    """Pad batch dynamically and set labels to -100 on padded positions for causal LM."""
+    """Dynamic padding + set padded labels to -100."""
 
     def __init__(
         self, tokenizer: PreTrainedTokenizerBase, pad_to_multiple_of: Optional[int] = 8
@@ -477,26 +204,21 @@ class DataCollatorForCausalLMWithPadding:
         self.pad_to_multiple_of = pad_to_multiple_of
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # Build features without labels for tokenizer.pad (it doesn't know how to pad 'labels')
-        feats = []
-        for f in features:
-            feats.append(
-                {
-                    "input_ids": (
-                        f["input_ids"].tolist()
-                        if isinstance(f["input_ids"], torch.Tensor)
-                        else f["input_ids"]
-                    ),
-                    "attention_mask": (
-                        f["attention_mask"].tolist()
-                        if isinstance(f["attention_mask"], torch.Tensor)
-                        else f["attention_mask"]
-                    ),
-                }
-            )
-
-        # Pad input_ids and attention_mask
-        # Suppress the fast tokenizer warning since we're intentionally using pad() for dynamic batching
+        feats = [
+            {
+                "input_ids": (
+                    f["input_ids"].tolist()
+                    if isinstance(f["input_ids"], torch.Tensor)
+                    else f["input_ids"]
+                ),
+                "attention_mask": (
+                    f["attention_mask"].tolist()
+                    if isinstance(f["attention_mask"], torch.Tensor)
+                    else f["attention_mask"]
+                ),
+            }
+            for f in features
+        ]
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore", message=".*using the `__call__` method is faster.*"
@@ -507,16 +229,19 @@ class DataCollatorForCausalLMWithPadding:
                 pad_to_multiple_of=self.pad_to_multiple_of,
                 return_tensors="pt",
             )
+        # Convert to dict and ensure all values are tensors
+        batch: Dict[str, torch.Tensor] = {}
+        for key, value in be.items():
+            if isinstance(value, torch.Tensor):
+                batch[key] = value
+            else:
+                batch[key] = torch.tensor(value)
 
-        # Convert to plain dict
-        batch = {k: v for k, v in be.items()}
-
-        # Create labels from padded input_ids and mask out padding
+        # Create labels from input_ids
         labels = batch["input_ids"].clone()
         if getattr(self.tokenizer, "pad_token_id", None) is not None:
             labels[batch["input_ids"] == self.tokenizer.pad_token_id] = -100
         else:
-            # Fall back to attention mask when no pad token id is defined
             labels[batch["attention_mask"] == 0] = -100
         batch["labels"] = labels
         return batch
@@ -530,96 +255,70 @@ def create_pretokenization_function(
     detected_format: Optional[tuple],
     auto_detect_format: bool,
 ):
-    """Create a function for pre-tokenizing dataset items via HuggingFace datasets.map()."""
-
-    # Determine the actual template format to use
     if template_format == "auto":
-        if hasattr(tokenizer, "chat_template") and tokenizer.chat_template is not None:
-            actual_template_format = "chat"
-        else:
-            actual_template_format = "basic"
+        actual = "chat" if getattr(tokenizer, "chat_template", None) else "basic"
     else:
-        actual_template_format = template_format
+        actual = template_format
 
-    def _format_text_for_pretokenization(instruction: str, response: str) -> str:
-        """Format instruction and response using the appropriate template."""
-        if actual_template_format == "chat":
+    def _format(instruction: str, response: str) -> str:
+        if actual == "chat":
             messages = [
                 {"role": "user", "content": instruction},
                 {"role": "assistant", "content": response},
             ]
-            formatted = tokenizer.apply_chat_template(
+            out = tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False
             )
-            return formatted if isinstance(formatted, str) else str(formatted)
-        elif actual_template_format == "alpaca":
+            return out if isinstance(out, str) else str(out)
+        if actual == "alpaca":
             return f"### Instruction:\n{instruction}\n\n### Response:\n{response}"
-        elif actual_template_format == "chatml":
+        if actual == "chatml":
             return f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>"
-        elif actual_template_format == "basic":
+        if actual == "basic":
             return instruction_template.format(
                 instruction=instruction, response=response
             )
-        else:
-            raise ValueError(f"Unknown template format: {actual_template_format}")
+        raise ValueError(f"Unknown format: {actual}")
 
     def pretokenize_item(item):
-        """Pre-tokenize a single dataset item."""
-        # Convert to standard format if auto-detection is enabled
+        converted = item
         if auto_detect_format and detected_format:
             try:
-                converted_item = DatasetFormatter.convert_to_standard_format(
+                converted = DatasetFormatter.convert_to_standard_format(
                     item, detected_format
                 )
             except Exception:
-                # Fallback: try per-item detection
                 try:
-                    item_format = DatasetFormatter.detect_format([item])
-                    converted_item = DatasetFormatter.convert_to_standard_format(
-                        item, item_format
+                    it_fmt = DatasetFormatter.detect_format([item])
+                    converted = DatasetFormatter.convert_to_standard_format(
+                        item, it_fmt
                     )
                 except Exception:
-                    logger.debug(
-                        "Pretokenize per-item detection failed; using original format."
-                    )
-                    converted_item = item
-        else:
-            converted_item = item
+                    logger.debug("Per-item detection failed; keeping original.")
+                    converted = item
 
-        # Extract instruction and response
-        if "instruction" in converted_item and "response" in converted_item:
-            instruction = converted_item["instruction"]
-            response = converted_item["response"]
-            text = _format_text_for_pretokenization(instruction, response)
-        elif "text" in converted_item:
-            text = converted_item["text"]
+        if "instruction" in converted and "response" in converted:
+            text = _format(converted["instruction"], converted["response"])
+        elif "text" in converted:
+            text = converted["text"]
         elif "instruction" in item and "response" in item:
-            instruction = item["instruction"]
-            response = item["response"]
-            text = _format_text_for_pretokenization(instruction, response)
+            text = _format(item["instruction"], item["response"])
         elif "text" in item:
             text = item["text"]
         else:
-            raise ValueError(
-                f"Dataset item must contain either 'instruction'+'response' or 'text' fields. Available keys: {list(item.keys())}"
-            )
+            raise ValueError("Item must contain 'instruction'+'response' or 'text'.")
 
-        # Tokenize
-        encoding = tokenizer(
+        enc = tokenizer(
             text,
             truncation=True,
             padding=False,
             max_length=max_length,
-            return_tensors=None,  # Return lists, not tensors
+            return_tensors=None,
         )
-
-        # Create labels (copy of input_ids)
-        labels = encoding["input_ids"]
-
         return {
-            "input_ids": encoding["input_ids"],
-            "attention_mask": encoding["attention_mask"],
-            "labels": labels,
+            "input_ids": enc["input_ids"],
+            "attention_mask": enc["attention_mask"],
+            "labels": enc["input_ids"],
         }
 
     return pretokenize_item
@@ -670,7 +369,6 @@ def pretokenize_and_cache_dataset(
 
     cache_path = os.path.join(cache_dir, f"{split_name}_{cache_key}")
 
-    # Try to load from cache
     if os.path.exists(cache_path):
         try:
             logger.info(
@@ -681,13 +379,9 @@ def pretokenize_and_cache_dataset(
         except Exception as e:
             logger.warning(f"Failed to load cached dataset: {e}. Re-tokenizing...")
 
-    # Pre-tokenize the dataset
     logger.info(f"Pre-tokenizing {split_name} dataset ({len(data)} examples)...")
-
-    # Convert to HF Dataset
     hf_dataset = HFDataset.from_list(data)
 
-    # Create pre-tokenization function
     pretokenize_fn = create_pretokenization_function(
         tokenizer=tokenizer,
         max_length=data_args.max_seq_length,
@@ -697,7 +391,6 @@ def pretokenize_and_cache_dataset(
         auto_detect_format=data_args.auto_detect_format,
     )
 
-    # Apply pre-tokenization
     tokenized_dataset = hf_dataset.map(
         pretokenize_fn,
         remove_columns=hf_dataset.column_names,
@@ -705,7 +398,6 @@ def pretokenize_and_cache_dataset(
         desc=f"Pre-tokenizing {split_name}",
     )
 
-    # Save to cache
     os.makedirs(cache_dir, exist_ok=True)
     tokenized_dataset.save_to_disk(cache_path)
     logger.info(f"Cached pre-tokenized {split_name} dataset to: {cache_path}")
@@ -1529,11 +1221,11 @@ def main(log_file=None):
     if platform.system() == "Windows":
         # Use fewer workers on Windows to avoid paging file issues with CUDA libraries
         num_workers = 2
-        logger.info("Using 2 DataLoader workers on Windows to avoid paging file issues")
+        # logger.info("Using 2 DataLoader workers on Windows to avoid paging file issues")
     else:
         # Use more workers on Unix-like systems
         num_workers = 8
-        logger.info("Using 8 DataLoader workers on Unix-like systems")
+        # logger.info("Using 8 DataLoader workers on Unix-like systems")
 
     logger.info(
         f"DataLoader pin_memory: {pin_memory_flag} | num_workers: {num_workers} | TF32 matmul: "
@@ -1624,7 +1316,6 @@ def main(log_file=None):
 
         # Load and prepare dataset with split awareness
         if data_args.use_existing_splits:
-            logger.info("Loading dataset with split awareness enabled")
             splits_data = load_dataset_with_splits_from_args(data_args)
 
             # Apply preprocessing to all splits
@@ -1649,7 +1340,7 @@ def main(log_file=None):
                 prefer_existing_splits=True,
             )
         else:
-            logger.info("Loading dataset with legacy single-split mode")
+            logger.info("Loading dataset with single-split mode")
             # Legacy behavior: load only train split and create custom validation split
             data = load_dataset_from_args(data_args)
 
@@ -1664,20 +1355,17 @@ def main(log_file=None):
 
             train_data, val_data = split_dataset(data, data_args.validation_split)
 
-        # Detect dataset format once to avoid duplicate logging
         detected_format = None
         if data_args.auto_detect_format and train_data:
             detected_format = DatasetFormatter.detect_format(train_data)
             logger.info(f"Detected dataset format: {detected_format}")
 
-        # Pre-tokenization if enabled
         is_pretokenized = False
         if args.pretokenize:
             cache_dir = args.pretokenize_cache_dir or os.path.join(
                 args.output_dir, "tokenized_cache"
             )
 
-            # Pre-tokenize train data
             train_data = pretokenize_and_cache_dataset(
                 data=train_data,
                 tokenizer=tokenizer,
@@ -1687,7 +1375,6 @@ def main(log_file=None):
                 split_name="train",
             )
 
-            # Pre-tokenize validation data if it exists
             if val_data:
                 val_data = pretokenize_and_cache_dataset(
                     data=val_data,
@@ -1701,7 +1388,6 @@ def main(log_file=None):
             is_pretokenized = True
             logger.info("Using pre-tokenized datasets")
 
-        # Create datasets
         train_dataset = InstructionDataset(
             train_data,
             tokenizer,
@@ -1726,7 +1412,6 @@ def main(log_file=None):
                 detected_format=detected_format,
             )
 
-        # Create data collator (dynamic padding + label masking on padding)
         data_collator = DataCollatorForCausalLMWithPadding(
             tokenizer=tokenizer, pad_to_multiple_of=8
         )
@@ -1796,18 +1481,12 @@ def main(log_file=None):
                         "Unable to parse layer specification: unknown model architecture"
                     )
 
-            # ----------------- NEW: branch on ICA mode -----------------
-            logger.info(
-                "Using GLOBAL ICA mode (one ICA over concatenated final MLP outputs)."
-            )
-
             # Load or compute component masks
             if args.ica_template_path:
                 logger.info(
                     f"Loading global ICA templates from {args.ica_template_path}"
                 )
                 templates = ica_mask.load_templates(args.ica_template_path)
-                # Materialize for immediate use
                 ica_mask.mask_dict_components = templates["templates"]
                 ica_mask.global_feature_layout = templates["layout"]
             else:
@@ -1873,10 +1552,12 @@ def main(log_file=None):
                     "Global ICA Component Coverage Summary (per selected component):"
                 )
                 for cid in comp_ids:
-                    layer_counts = {
-                        lid: len(chs)
-                        for lid, chs in ica_mask.mask_dict_components[cid].items()
-                    }
+                    comp = (
+                        ica_mask.mask_dict_components.get(cid, {})
+                        if ica_mask.mask_dict_components
+                        else {}
+                    )
+                    layer_counts = {lid: len(chs) for lid, chs in comp.items()}
 
                     logger.info(
                         f"  • comp {cid}: {sum(layer_counts.values())} channels across {len(layer_counts)} layers"
@@ -1887,7 +1568,11 @@ def main(log_file=None):
 
                 _union_sets = _dd(set)
                 for cid in comp_ids:
-                    comp = ica_mask.mask_dict_components.get(cid, {})
+                    comp = (
+                        ica_mask.mask_dict_components.get(cid, {})
+                        if ica_mask.mask_dict_components
+                        else {}
+                    )
                     for layer, chans in comp.items():
                         for ch in chans:
                             _union_sets[layer].add(ch)
@@ -1924,94 +1609,12 @@ def main(log_file=None):
             logger.info(f"Resuming training from checkpoint: {checkpoint}")
 
         # Static estimate of masked trainable parameters (LoRA down_proj rows)
-        def _estimate_masked_params_for_lora_down_proj(
-            model, mask_union, mask_mode
-        ) -> int:
-            """Estimate count of trainable params that are effectively masked by output channel masking.
-            - For PEFT: counts rows in lora_B of mlp.down_proj corresponding to masked output channels.
-            - For full FT (no PEFT): counts rows in base down_proj weight if trainable.
-            """
-            total = 0
-            try:
-                # Unwrap PEFT to get base model for MLP discovery
-                actual_model = model
-                if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
-                    actual_model = model.base_model.model
-                elif hasattr(model, "base_model"):
-                    actual_model = model.base_model
 
-                # Use ICAMask helper to find MLPs if available
-                mlps = None
-                try:
-                    blocks, mlps = ica_mask._find_decoder_blocks_and_mlps(actual_model)  # type: ignore[attr-defined]
-                except Exception:
-                    mlps = None
-
-                hidden_size = (
-                    getattr(model.config, "hidden_size", None)
-                    or getattr(model.config, "n_embd", None)
-                    or getattr(model.config, "d_model", None)
-                )
-                if hidden_size is None or not mlps:
-                    return 0
-
-                for i, mlp in enumerate(mlps):
-                    if mlp is None:
-                        continue
-                    chans = (
-                        mask_union.get(str(i), [])
-                        if isinstance(mask_union, dict)
-                        else []
-                    )
-                    masked_rows = (
-                        (hidden_size - len(chans))
-                        if mask_mode == "preserve"
-                        else len(chans)
-                    )
-                    if masked_rows <= 0:
-                        continue
-
-                    dp = getattr(mlp, "down_proj", None)
-                    if dp is None:
-                        continue
-
-                    # Prefer LoRA B matrices if present
-                    lora_B = getattr(dp, "lora_B", None)
-                    if lora_B:
-                        for _, module in lora_B.items():
-                            w = getattr(module, "weight", None)
-                            if w is None or w.ndim != 2:
-                                continue
-                            dim0, dim1 = w.shape
-                            out_features = getattr(dp, "out_features", hidden_size)
-                            if dim0 == hidden_size or dim0 == out_features:
-                                r = dim1
-                                total += masked_rows * r
-                            elif dim1 == hidden_size or dim1 == out_features:
-                                r = dim0
-                                total += masked_rows * r
-                    else:
-                        # If base layer is trainable, estimate masked rows on base weight
-                        w = getattr(dp, "weight", None)
-                        if (
-                            w is not None
-                            and getattr(w, "requires_grad", False)
-                            and w.ndim == 2
-                        ):
-                            out_dim, in_dim = w.shape
-                            if out_dim == hidden_size:
-                                total += masked_rows * in_dim
-                return int(total)
-            except Exception:
-                return 0
-
-        # Log trainable parameters count
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         logger.info(f"Trainable parameters: {trainable_params:,}")
 
-        # Also log a static estimate adjusted by masked output channels (LoRA down_proj rows)
         if applied_mask_mode in ("lesion", "preserve") and mask_union:
-            masked_params_est = _estimate_masked_params_for_lora_down_proj(
+            masked_params_est = ica_mask.estimate_masked_params_for_lora_down_proj(
                 model, mask_union, applied_mask_mode
             )
             effective_trainable = max(0, trainable_params - masked_params_est)
@@ -2020,27 +1623,21 @@ def main(log_file=None):
                 f"[= {trainable_params:,} - masked {masked_params_est:,}]"
             )
 
-        # Start training
         logger.info("Starting training...")
         trainer.train(resume_from_checkpoint=checkpoint)
 
-        # Remove hooks to save an unmasked model
         for h in mask_handles:
             h.remove()
 
-        # Save final model
         final_output_dir = os.path.join(args.output_dir, "final_model")
         save_model_and_tokenizer(model, tokenizer, final_output_dir, lora_args.use_peft)
 
-        # Merge adapter with base model if requested
         if args.merge_adapter_with_base and lora_args.use_peft:
             logger.info("Merging LoRA adapter with base model...")
 
-            # Create separate directories for adapter and merged model
             adapter_output_dir = os.path.join(args.output_dir, "adapter")
             merged_output_dir = os.path.join(args.output_dir, "merged_model")
 
-            # Save adapter separately (copy from final_model to adapter directory)
             import shutil
 
             if os.path.exists(adapter_output_dir):
@@ -2048,10 +1645,8 @@ def main(log_file=None):
             shutil.copytree(final_output_dir, adapter_output_dir)
             logger.info(f"Adapter saved to: {adapter_output_dir}")
 
-            # Import merge function
             from .utils.model_utils import merge_adapter_with_base_model
 
-            # Merge adapter with base model
             try:
                 merge_adapter_with_base_model(
                     adapter_path=final_output_dir,
@@ -2060,7 +1655,6 @@ def main(log_file=None):
                 )
                 logger.info(f"Merged model saved to: {merged_output_dir}")
 
-                # Also save tokenizer to merged model directory
                 if hasattr(tokenizer, "save_pretrained"):
                     tokenizer.save_pretrained(merged_output_dir)
                     logger.info("Tokenizer saved to merged model directory")
@@ -2073,7 +1667,6 @@ def main(log_file=None):
                 "--merge_adapter_with_base was specified but PEFT is not enabled. Skipping merge operation."
             )
 
-        # Convert to GGUF if requested
         if args.convert_to_gguf:
             gguf_output_path = os.path.join(args.output_dir, "model.gguf")
             # Prefer merged model for GGUF conversion when available
@@ -2090,13 +1683,11 @@ def main(log_file=None):
                 model_dir_for_gguf, gguf_output_path, args.gguf_quantization
             )
 
-        # Upload to Hugging Face Hub if requested
         if args.push_to_hub:
             if not args.hub_repo_id:
                 logger.error("--hub_repo_id is required when using --push_to_hub")
                 raise ValueError("hub_repo_id must be specified for Hub upload")
 
-            # Determine which model to upload
             upload_model_path = final_output_dir
             upload_use_peft = lora_args.use_peft
 
@@ -2105,7 +1696,6 @@ def main(log_file=None):
                 and args.merge_adapter_with_base
                 and lora_args.use_peft
             ):
-                # Upload the merged model instead of the adapter
                 merged_output_dir = os.path.join(args.output_dir, "merged_model")
                 if os.path.exists(merged_output_dir):
                     upload_model_path = merged_output_dir

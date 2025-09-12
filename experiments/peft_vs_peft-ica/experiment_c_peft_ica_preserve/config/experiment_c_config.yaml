@@ -17,7 +17,7 @@ model_name_or_path: "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve
 
 
 # Output configuration
-output_dir: "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/components_0/third_ft"
+output_dir: "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/components_0/test_ft"
 torch_dtype: "auto"  # Use platform-optimized dtype
 
 # Dataset configuration
@@ -42,7 +42,8 @@ lora_target_modules: null  # Auto-detect target modules
 
 # Training Configuration
 #max_steps: 5 # Uncomment to override num_train_epochs
-num_train_epochs: 2     # Exactly 2 epochs as specified
+num_train_epochs: 4     # Exactly 2 epochs as specified
+max_steps: 1
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 1
 gradient_accumulation_steps: 1
@@ -88,7 +89,7 @@ mask_mode: "preserve"      # Enable ICA masking in 'preserve' mode
 ica_template_path: "ica_templates/llama-3.2-3b/physics_3/global_templates.json"
 ica_components: 5      # Number of ICA components
 ica_percentile: 98.0    # Percentile threshold for neuron selection
-ica_component_ids: [0]
+ica_component_ids: [0, 1]
 
 # Authentication
 use_auth_token: true    # For gated model access

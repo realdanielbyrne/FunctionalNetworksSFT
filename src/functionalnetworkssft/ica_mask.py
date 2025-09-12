@@ -668,3 +668,90 @@ class ICAMask:
             top_tid = int(lst[0][0])
             counts[top_tid] = counts.get(top_tid, 0) + 1
         return counts
+
+    def estimate_masked_params_for_lora_down_proj(
+        self,
+        model: PreTrainedModel,
+        mask_union: Dict[str, List[int]],
+        mask_mode: Literal["lesion", "preserve"],
+    ) -> int:
+        """
+        Estimate count of trainable params that are effectively masked by output channel masking.
+
+        Args:
+            model: The model to analyze
+            mask_union: Dictionary mapping layer indices (as strings) to lists of channel indices
+            mask_mode: Either "lesion" (mask selected channels) or "preserve" (mask all but selected)
+
+        Returns:
+            Estimated number of masked trainable parameters
+
+        Notes:
+            - For PEFT: counts rows in lora_B of mlp.down_proj corresponding to masked output channels.
+            - For full FT (no PEFT): counts rows in base down_proj weight if trainable.
+        """
+        total = 0
+        try:
+            # Unwrap PEFT to get base model for MLP discovery
+            actual_model = model
+            if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+                actual_model = model.base_model.model
+            elif hasattr(model, "base_model"):
+                actual_model = model.base_model
+
+            # Use ICAMask helper to find MLPs
+            blocks, mlps = self._find_decoder_blocks_and_mlps(actual_model)
+            if blocks is None or mlps is None:
+                return 0
+
+            hidden_size = (
+                getattr(model.config, "hidden_size", None)
+                or getattr(model.config, "n_embd", None)
+                or getattr(model.config, "d_model", None)
+            )
+            if hidden_size is None:
+                return 0
+
+            for i, mlp in enumerate(mlps):
+                if mlp is None:
+                    continue
+                chans = mask_union.get(str(i), [])
+                masked_rows = (
+                    (hidden_size - len(chans))
+                    if mask_mode == "preserve"
+                    else len(chans)
+                )
+                if masked_rows <= 0:
+                    continue
+
+                dp = getattr(mlp, "down_proj", None)
+                if dp is None:
+                    continue
+
+                lora_B = getattr(dp, "lora_B", None)
+                if lora_B:
+                    for _, module in lora_B.items():
+                        w = getattr(module, "weight", None)
+                        if w is None or w.ndim != 2:
+                            continue
+                        dim0, dim1 = w.shape
+                        out_features = getattr(dp, "out_features", hidden_size)
+                        if dim0 == hidden_size or dim0 == out_features:
+                            r = dim1
+                            total += masked_rows * r
+                        elif dim1 == hidden_size or dim1 == out_features:
+                            r = dim0
+                            total += masked_rows * r
+                else:
+                    w = getattr(dp, "weight", None)
+                    if (
+                        w is not None
+                        and getattr(w, "requires_grad", False)
+                        and w.ndim == 2
+                    ):
+                        out_dim, in_dim = w.shape
+                        if out_dim == hidden_size:
+                            total += masked_rows * in_dim
+            return int(total)
+        except Exception:
+            return 0

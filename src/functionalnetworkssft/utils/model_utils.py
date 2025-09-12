@@ -24,6 +24,10 @@ from peft import (
 
 logger = logging.getLogger(__name__)
 
+# Caches to avoid redundant environment checks/logs
+_DEVICE_CACHE: Optional[Tuple[torch.device, str]] = None
+_QUANT_SUPPORT_CACHE: Optional[bool] = None
+
 
 def get_optimal_device() -> Tuple[torch.device, str]:
     """
@@ -32,11 +36,17 @@ def get_optimal_device() -> Tuple[torch.device, str]:
     Returns:
         Tuple of (device, device_name) where device_name is human-readable
     """
+    global _DEVICE_CACHE
+
+    # Return cached result to avoid repeated logging and checks
+    if _DEVICE_CACHE is not None:
+        return _DEVICE_CACHE
+
     if torch.cuda.is_available():
         device = torch.device("cuda:0")  # Specify index for consistency
         device_name = f"CUDA ({torch.cuda.get_device_name()})"
 
-        # Log additional CUDA information
+        # Log additional CUDA information (once)
         cuda_version = torch.version.cuda
         device_count = torch.cuda.device_count()
         memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
@@ -45,7 +55,7 @@ def get_optimal_device() -> Tuple[torch.device, str]:
         logger.info(f"CUDA version: {cuda_version}, Device count: {device_count}")
         logger.info(f"GPU memory: {memory_gb:.1f} GB")
 
-        # Test basic CUDA operations to ensure compatibility
+        # Test basic CUDA operations to ensure compatibility (once)
         try:
             test_tensor = torch.randn(10, 10, device=device)
             _ = torch.matmul(test_tensor, test_tensor)
@@ -56,17 +66,22 @@ def get_optimal_device() -> Tuple[torch.device, str]:
             device = torch.device("cpu")
             device_name = f"CPU ({platform.processor()})"
 
-        return device, device_name
+        _DEVICE_CACHE = (device, device_name)
+        return _DEVICE_CACHE
+
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = torch.device("mps")
         device_name = "Apple Silicon MPS"
         logger.info(f"Using MPS device: {device_name}")
-        return device, device_name
+        _DEVICE_CACHE = (device, device_name)
+        return _DEVICE_CACHE
+
     else:
         device = torch.device("cpu")
         device_name = f"CPU ({platform.processor()})"
         logger.info(f"Using CPU device: {device_name}")
-        return device, device_name
+        _DEVICE_CACHE = (device, device_name)
+        return _DEVICE_CACHE
 
 
 def is_quantization_supported() -> bool:
@@ -76,20 +91,28 @@ def is_quantization_supported() -> bool:
     Returns:
         True if quantization is supported, False otherwise
     """
+    global _QUANT_SUPPORT_CACHE
+
+    if _QUANT_SUPPORT_CACHE is not None:
+        return _QUANT_SUPPORT_CACHE
+
     try:
-        import bitsandbytes
+        import bitsandbytes  # noqa: F401
 
         # BitsAndBytes requires CUDA
         if torch.cuda.is_available():
             logger.info("Quantization (BitsAndBytes) is supported")
+            _QUANT_SUPPORT_CACHE = True
             return True
         else:
             logger.warning(
                 "Quantization (BitsAndBytes) requires CUDA - not available on this platform"
             )
+            _QUANT_SUPPORT_CACHE = False
             return False
     except ImportError:
         logger.warning("BitsAndBytes not installed - quantization not available")
+        _QUANT_SUPPORT_CACHE = False
         return False
 
 
@@ -530,14 +553,14 @@ def save_model_and_tokenizer(
         use_peft = hasattr(model, "peft_config") and model.peft_config is not None
 
     if use_peft:
-        logger.info("Saving PEFT model (adapters)")
+        # logger.info("Saving PEFT model (adapters)")
         # For PEFT models, save the adapters
         if hasattr(model, "save_pretrained"):
             model.save_pretrained(output_dir)
         else:
             logger.warning("Model does not have save_pretrained method")
     else:
-        logger.info("Saving full fine-tuned model")
+        # logger.info("Saving full fine-tuned model")
         # For full fine-tuning, save the entire model
         if hasattr(model, "save_pretrained"):
             model.save_pretrained(output_dir)
@@ -568,7 +591,7 @@ def save_model_and_tokenizer(
         ):
             logger.info("Full model weights saved")
 
-    logger.info("Model and tokenizer saved successfully")
+    # logger.info("Model and tokenizer saved successfully")
 
 
 def convert_to_gguf(
@@ -659,10 +682,10 @@ def merge_adapter_with_base_model(
     """Merge LoRA adapter with base model to create unified model."""
     import os
 
-    logger.info(f"Loading PEFT model from {adapter_path}")
+    # logger.info(f"Loading PEFT model from {adapter_path}")
     model = AutoPeftModelForCausalLM.from_pretrained(adapter_path)
 
-    logger.info("Merging adapter with base model...")
+    # logger.info("Merging adapter with base model...")
     merged_model = model.merge_and_unload()
 
     logger.info(f"Saving merged model to {output_path}")
@@ -670,4 +693,4 @@ def merge_adapter_with_base_model(
     os.makedirs(output_path, exist_ok=True)
     merged_model.save_pretrained(output_path)
 
-    logger.info("Adapter merged successfully")
+    # logger.info("Adapter merged successfully")

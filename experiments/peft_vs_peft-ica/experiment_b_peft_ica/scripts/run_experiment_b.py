@@ -85,15 +85,6 @@ def run_single_experiment(config):
     logger.info(f"EXPERIMENT B: COMPONENTS [{components_str}] MASKED")
     logger.info("=" * 80)
 
-    logger.info(f"Model: {config.get('model_name_or_path')}")
-    logger.info(f"Dataset: {config.get('dataset_name_or_path')}")
-    logger.info("Method: PEFT (LoRA) + ICA masking")
-    logger.info(f"Epochs: {config.get('num_train_epochs', 2)}")
-    logger.info(f"ICA Masking: ENABLED ({config.get('mask_mode', 'lesion')} mode)")
-    logger.info(f"Masked Component IDs: {component_ids}")
-    logger.info(f"Output Directory: {config.get('output_dir')}")
-    logger.info("=" * 80)
-
     # Create temporary config file with updated names
     temp_config_path = (
         "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/temp_config.yaml"
@@ -151,11 +142,7 @@ def run_experiment_b():
     component_ids = config.get("ica_component_ids", [0, 1])
     components_str = ",".join(map(str, component_ids))
 
-    logger.info("=" * 80)
-    logger.info("EXPERIMENT B: PEFT + ICA MASKING FINE-TUNING")
-    logger.info("=" * 80)
     logger.info(f"Components to mask: [{components_str}]")
-    logger.info("=" * 80)
 
     # Run the experiment
     success = run_single_experiment(config)

@@ -224,14 +224,21 @@ class ConfigDefaults:
 
         # Apply default output directory if not specified
         if not updated_config.get("output_dir"):
-            default_output = cls.get_default_output_dir()
-            updated_config["output_dir"] = default_output
-            logger.info(f"Applied default output directory: {default_output}")
+            # Build a model-specific output directory under the default root
+            default_output_root = cls.get_default_output_dir()
+            base_model = updated_config.get("model_name_or_path", "model")
+            model_dir_name = cls.extract_model_base_name(base_model)
+            model_output_dir = os.path.join(default_output_root, model_dir_name)
+
+            updated_config["output_dir"] = model_output_dir
+            logger.info(
+                f"Applied default output directory (model-specific): {model_output_dir}"
+            )
 
             # Ensure the directory exists
-            if not cls.ensure_directory_exists(default_output):
+            if not cls.ensure_directory_exists(model_output_dir):
                 logger.warning(
-                    f"Could not create default output directory: {default_output}"
+                    f"Could not create default output directory: {model_output_dir}"
                 )
 
         # Apply checkpoint directory defaults to stage configs
@@ -497,15 +504,21 @@ class ConfigDefaults:
 
         # Apply default output directory if not specified
         if not updated_config.get("output_dir"):
-            default_output = cls.get_default_output_dir()
+            # Build a model-specific output directory under the default root
+            default_output_root = cls.get_default_output_dir()
+            base_model = updated_config.get("model_name_or_path", "model")
+            model_dir_name = cls.extract_model_base_name(base_model)
+            model_output_dir = os.path.join(default_output_root, model_dir_name)
 
-            # Try to create the default directory
-            if cls.ensure_directory_exists(default_output):
-                updated_config["output_dir"] = default_output
-                logger.info(f"Applied default output directory: {default_output}")
+            # Try to create the model-specific directory
+            if cls.ensure_directory_exists(model_output_dir):
+                updated_config["output_dir"] = model_output_dir
+                logger.info(
+                    f"Applied default output directory (model-specific): {model_output_dir}"
+                )
             else:
                 # Use fallback directory
-                fallback_dir = cls.get_fallback_directory(default_output)
+                fallback_dir = cls.get_fallback_directory(model_output_dir)
                 updated_config["output_dir"] = fallback_dir
                 logger.warning(f"Using fallback output directory: {fallback_dir}")
 

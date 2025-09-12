@@ -32,22 +32,180 @@ The framework implements **functional network masking** - a technique that appli
 
 ### Installation
 
-1. **Clone the repository:**
+#### Prerequisites
 
-   ```bash
-   git clone <repository-url>
-   cd FunctionalNetworksSFT
-   ```
+- **Python 3.12+**
+- **Poetry** for dependency management
+- **Git** for cloning the repository
 
-2. **Install dependencies:**
+#### 1. Clone the Repository
 
-   ```bash
-   poetry install
-   ```
+```bash
+git clone <repository-url>
+cd FunctionalNetworksSFT
+```
 
-3. **Platform-specific setup:**
+#### 2. Hardware-Specific Installation
 
-   For detailed platform-specific installation instructions, see [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md).
+Choose the installation method that matches your hardware configuration:
+
+##### 🚀 CUDA-Enabled Systems (NVIDIA GPUs)
+
+**Recommended for:** Windows/Linux systems with NVIDIA GPUs
+
+```bash
+# Step 1: Clone and navigate to the repository
+git clone <repository-url>
+cd FunctionalNetworksSFT
+
+# Step 2: Install base dependencies (Poetry creates virtual environment automatically)
+poetry install
+
+# Step 3: Run automated CUDA setup (recommended)
+poetry run python scripts/setup_cuda.py
+```
+
+**Alternative manual installation:**
+
+```bash
+# Steps 1-2 same as above, then:
+# Install CUDA wheels explicitly (prevents CPU fallback)
+poetry run pip uninstall -y torch torchvision torchaudio
+poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Then install CUDA extras
+poetry install --extras cuda
+```
+
+> **Important:** Always use `poetry run` or `poetry shell` to ensure commands run within Poetry's virtual environment. Never run `python scripts/setup_cuda.py` directly as this would install packages globally.
+
+**Features enabled:**
+
+- ✅ GPU acceleration with CUDA
+- ✅ 4-bit/8-bit quantization with BitsAndBytes
+- ✅ Flash Attention (when compatible)
+- ✅ Automatic mixed precision training
+
+**Verify installation:**
+
+```bash
+poetry run python tests/test_cuda_configuration.py
+```
+
+##### 🍎 Apple Silicon (M1/M2/M3/M4 Macs)
+
+**Recommended for:** macOS systems with Apple Silicon processors
+
+```bash
+# Clone and navigate to the repository
+git clone <repository-url>
+cd FunctionalNetworksSFT
+
+# Poetry automatically creates and manages the virtual environment
+# Install with Apple Silicon optimizations
+poetry install --extras apple-silicon
+```
+
+**Features enabled:**
+
+- ✅ GPU acceleration with Metal Performance Shaders (MPS)
+- ✅ Optimized for Apple Silicon architecture
+- ✅ Native ARM64 performance
+- ❌ Quantization not available (BitsAndBytes incompatible)
+
+**Verify installation:**
+
+```bash
+python -c "import torch; print('MPS available:', torch.backends.mps.is_available())"
+```
+
+##### 💻 CPU-Only Systems
+
+**Recommended for:** Any system without GPU acceleration or as a fallback
+
+```bash
+# Clone and navigate to the repository
+git clone <repository-url>
+cd FunctionalNetworksSFT
+
+# Poetry automatically creates and manages the virtual environment
+# Install CPU-only version
+poetry install --extras cpu
+```
+
+**Features enabled:**
+
+- ✅ CPU-based training (slower but universal)
+- ✅ Full precision training (fp32)
+- ✅ Compatible with any hardware
+- ❌ No GPU acceleration
+- ❌ No quantization support
+
+#### 3. Verify Your Installation
+
+After installation, verify everything is working correctly:
+
+```bash
+# Check platform detection and recommendations
+poetry run python src/functionalnetworkssft/utils/platform_setup.py
+
+# Run comprehensive tests (CUDA systems only)
+poetry run python tests/test_cuda_configuration.py
+
+# Quick verification
+poetry run python -c "
+import torch
+from functionalnetworkssft.utils.model_utils import get_optimal_device
+device, name = get_optimal_device()
+print(f'Using device: {name}')
+print(f'PyTorch version: {torch.__version__}')
+"
+```
+
+#### 4. Troubleshooting Installation Issues
+
+**CUDA Issues:**
+
+```bash
+# Check NVIDIA GPU detection
+nvidia-smi
+
+# Reinstall with CUDA support
+poetry run python scripts/setup_cuda.py
+
+# Manual PyTorch CUDA installation
+poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+**Apple Silicon Issues:**
+
+```bash
+# Verify MPS availability
+python -c "import torch; print('MPS:', torch.backends.mps.is_available())"
+
+# Reinstall if needed
+poetry install --extras apple-silicon --force
+```
+
+**General Issues:**
+
+```bash
+# Clean installation
+poetry env remove python
+poetry install --extras <your-platform>
+
+# Check Poetry environment
+poetry env info
+```
+
+#### Platform Comparison
+
+| Platform | Installation Command | GPU Acceleration | Quantization | Recommended Use |
+|----------|---------------------|------------------|--------------|-----------------|
+| **NVIDIA GPU** | `python scripts/setup_cuda.py` | ✅ CUDA | ✅ BitsAndBytes | Production training, large models |
+| **Apple Silicon** | `poetry install --extras apple-silicon` | ✅ MPS | ❌ Not available | Development, medium models |
+| **CPU Only** | `poetry install --extras cpu` | ❌ CPU only | ❌ Not available | Testing, small models |
+
+For detailed platform-specific instructions and troubleshooting, see [CROSS_PLATFORM_SETUP.md](CROSS_PLATFORM_SETUP.md).
 
 ### Authentication Setup
 
@@ -249,19 +407,201 @@ This command will:
 ✅ Successfully accessed the gated model!
 ```
 
+## ICA Template Building
+
+FunctionalNetworksSFT includes a dedicated tool for building ICA templates from datasets without requiring model training. These templates can be used later during training to apply pre-computed functional network masks.
+
+### Building ICA Templates
+
+The `build_ica_templates.py` script supports both positional and named arguments for maximum flexibility:
+
+#### Quick Start (Positional Arguments)
+
+```bash
+# Basic usage with positional arguments (recommended)
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    tatsu-lab/alpaca
+
+# Multiple datasets
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    databricks/databricks-dolly-15k \
+    tatsu-lab/alpaca
+
+# With optional parameters
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    dataset1.json dataset2.jsonl \
+    --ica_template_samples_per_ds 200 \
+    --ica_template_output ./custom/output/ \
+    --ica_components 15 \
+    --ica_percentile 95.0
+```
+
+#### Alternative Syntax (Named Arguments)
+
+```bash
+# Using named arguments (also supported)
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    --model_name_or_path meta-llama/Llama-3.2-1B-Instruct \
+    --ica_build_templates_from tatsu-lab/alpaca
+
+# Mixed usage (positional model + named datasets)
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    meta-llama/Llama-3.2-1B-Instruct \
+    --ica_build_templates_from tatsu-lab/alpaca databricks/databricks-dolly-15k
+```
+
+### Supported Dataset Formats
+
+The ICA template builder supports multiple dataset formats:
+
+- **Local files**: `.json`, `.jsonl`, `.csv`
+- **Hugging Face Hub datasets**: Any dataset name (e.g., `squad`, `alpaca`)
+
+### Configuration Options
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `model` (positional) | Model name or path for ICA computation | Required |
+| `datasets` (positional) | One or more dataset paths | Required |
+| `--ica_template_samples_per_ds` | Number of samples per dataset | 100 |
+| `--ica_template_output` | Output directory for templates | `./ica_templates/` |
+| `--ica_components` | Number of ICA components | 10 |
+| `--ica_percentile` | Percentile threshold | 98.0 |
+| `--ica_dtype` | Data type for computation | `auto` |
+| `--max_seq_length` | Maximum sequence length | 512 |
+| `--template_format` | Dataset format detection | `auto` |
+
+### Example: Building Templates for Code Tasks
+
+```bash
+# Build ICA templates for code-related fine-tuning
+poetry run python -m functionalnetworkssft.build_ica_templates \
+    microsoft/DialoGPT-medium \
+    code_dataset.json logic_dataset.jsonl \
+    --ica_template_samples_per_ds 500 \
+    --ica_components 20 \
+    --ica_percentile 95.0 \
+    --ica_template_output ./code_ica_templates/
+```
+
+### Using Pre-computed Templates
+
+Once built, ICA templates can be used during training:
+
+```bash
+poetry run fnsft \
+    --model_name_or_path microsoft/DialoGPT-medium \
+    --dataset_name_or_path your_dataset.json \
+    --output_dir ./output \
+    --ica_template_path ./ica_templates/global_templates.json \
+    --mask_mode lesion \
+    --ica_component_ids [0]
+```
+
+### Template Output
+
+The script generates:
+
+- **Template file**: `global_templates.json` containing component masks
+- **Component coverage summary**: Detailed breakdown of channels per layer
+- **Logging output**: Progress and configuration details
+
+**Example output:**
+
+```
+✅ Template building completed successfully!
+✅ Templates saved to: ./ica_templates/global_templates.json
+✅ Number of components: 10
+
+Component Coverage Summary:
+  • Component 0: 656 channels across 12 layers
+  • Component 1: 1024 channels across 8 layers
+  • Component 2: 512 channels across 15 layers
+  ...
+```
+
 ## Platform Support
 
-| Platform | GPU Acceleration | Quantization | Status |
-|----------|------------------|--------------|--------|
-| CUDA (NVIDIA) | ✅ CUDA | ✅ BitsAndBytes | Fully Supported |
-| Apple Silicon | ✅ MPS | ❌ Not Available | Supported |
-| CPU Only | ❌ CPU Only | ❌ Not Available | Basic Support |
+The package provides optimized installations for different hardware configurations:
+
+### 🚀 NVIDIA GPU Systems (CUDA)
+
+**Installation:** `python scripts/setup_cuda.py`
+
+| Feature | Support | Notes |
+|---------|---------|-------|
+| GPU Acceleration | ✅ CUDA | Full NVIDIA GPU support |
+| Mixed Precision | ✅ fp16/bf16 | Automatic precision selection |
+| Quantization | ✅ 4-bit/8-bit | BitsAndBytes integration |
+| Flash Attention | ✅ When compatible | Faster attention computation |
+| Memory Optimization | ✅ Gradient checkpointing | Reduced memory usage |
+
+**Recommended for:** Production training, large models (7B+ parameters)
+
+### 🍎 Apple Silicon (MPS)
+
+**Installation:** `poetry install --extras apple-silicon`
+
+| Feature | Support | Notes |
+|---------|---------|-------|
+| GPU Acceleration | ✅ MPS | Metal Performance Shaders |
+| Mixed Precision | ✅ fp16 | Optimized for Apple Silicon |
+| Quantization | ❌ Not available | BitsAndBytes incompatible |
+| Flash Attention | ❌ Not available | MPS limitations |
+| Memory Optimization | ✅ Gradient checkpointing | Available |
+
+**Recommended for:** Development, medium models (1B-7B parameters)
+
+### 💻 CPU-Only Systems
+
+**Installation:** `poetry install --extras cpu`
+
+| Feature | Support | Notes |
+|---------|---------|-------|
+| GPU Acceleration | ❌ CPU only | No hardware acceleration |
+| Mixed Precision | ❌ fp32 only | Full precision training |
+| Quantization | ❌ Not available | CPU limitations |
+| Flash Attention | ❌ Not available | CPU limitations |
+| Memory Optimization | ✅ Gradient checkpointing | Available |
+
+**Recommended for:** Testing, small models (<1B parameters), development without GPU
 
 ## Documentation
 
 - **[Cross-Platform Setup Guide](CROSS_PLATFORM_SETUP.md)** - Detailed installation instructions for all platforms
 - **[Training Guide](docs/training.md)** - Comprehensive training documentation (coming soon)
 - **[API Reference](docs/api.md)** - API documentation (coming soon)
+
+## Prior Research
+
+This project is inspired by the following research:
+
+- Title: Brain-Inspired Exploration of Functional Networks and Key Neurons in Large Language Models
+  Authors: Yiheng Liu, Xiaohui Gao, Haiyang Sun, Bao Ge, Tianming Liu, Junwei Han, Xintao Hu
+  Link: <https://arxiv.org/html/2502.20408v1>
+
+### Summary of the paper
+
+The authors investigate whether large language models (LLMs) exhibit brain-like functional networks. Drawing on cognitive neuroscience, they apply Independent Component Analysis (ICA) to neuron activations (specifically MLP outputs) to decompose them into functional networks. They evaluate importance via two interventions: masking (lesion) and preservation. Key findings include that masking a small set of “key” networks (often comprising less than ~2% of neurons) can severely degrade performance, while preserving a compact subset of networks (on the order of ~10% of MLP neurons) can retain near-baseline capability. They also study group-wise ICA templates and similarity across inputs/models, supporting the view that LLMs contain recurring functional patterns.
+
+### Concepts that informed this software
+
+- Functional brain networks analogue: Treating LLM neuron activations like fMRI signals and recovering recurring functional networks via ICA.
+- ICA over MLP activations: Running ICA on the final MLP outputs to obtain component-wise channel maps per layer.
+- Group-wise templates and similarity: Building global (group) templates from multiple samples and relating per-sample networks via similarity metrics.
+- Causal probes via interventions: Neuron/network lesion and preservation experiments to assess contribution to model behavior and efficiency.
+
+### Relation to this codebase
+
+- ICA-based discovery: This repo implements FastICA-based network extraction from MLP activations, including a global, group-wise mode. See `src/functionalnetworkssft/ica_mask.py` (`compute_global_networks`) and the CLI for template building in `src/functionalnetworkssft/build_ica_templates.py`.
+- Network masking during SFT: We apply binary masks as forward hooks at MLP outputs to support both lesion and preserve modes. See `ICAMask.apply_component_masks` in `ica_mask.py` and the `--mask_mode` options in the training CLI.
+- Template-driven workflows: Precomputed templates can be saved/loaded (`--ica_template_path`), selecting components (`--ica_component_ids`) and controlling sparsity via percentile thresholds (`--ica_percentile`).
+- Experimental comparisons: The `experiments/peft_vs_peft-ica` directory includes runs contrasting standard PEFT with PEFT+ICA masking in lesion/preserve settings.
+
+This repository is an independent, engineering-focused reimplementation that operationalizes the paper’s core ideas for supervised fine-tuning workflows (HF Transformers + LoRA/QLoRA), enabling reproducible ICA template building, component selection, and functional-network-aware training.
 
 ## Research
 

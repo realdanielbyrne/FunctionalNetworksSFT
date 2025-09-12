@@ -9,9 +9,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     # Core ML frameworks with cross-platform support
-    "torch>=2.4.0,<2.8.0",  # PyTorch with MPS support for Apple Silicon
-    "torchvision>=0.19.0",  # Vision utilities
-    "torchaudio>=2.4.0",    # Audio utilities
+    # Note: PyTorch should be installed with platform-specific CUDA/CPU versions
+    # Use: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 (for CUDA 12.8 wheels)
+    # Or: pip install torch torchvision torchaudio (for CPU/MPS on Apple Silicon)
+
+    # NOTE: Do NOT declare torch here.
+    # PyTorch (CUDA/MPS/CPU) is installed via scripts/setup_cuda.py or
+    # by selecting an appropriate extra (cuda, apple-silicon, cpu).
 
     # Hugging Face ecosystem
     "transformers>=4.40.0,<5.0.0",  # Core transformers library
@@ -32,30 +36,27 @@ dependencies = [
     "scikit-learn>=1.3.0",          # Machine learning utilities (for ICA)
     "safetensors>=0.4.0",           # Safe tensor serialization
 
-    # Development and testing
+    # Development and testing 
     "pytest>=7.0.0",               # Testing framework
     "black>=23.0.0",               # Code formatting
     "isort>=5.12.0",               # Import sorting
     "mypy>=1.0.0",                 # Type checking
     "openai (>=1.97.1,<2.0.0)",
+    "lm-eval (>=0.4.9,<0.5.0)",
+    "evaluate (>=0.4.5,<0.5.0)",
+    "nltk (>=3.9.1,<4.0.0)",
+    "rouge-score (>=0.1.2,<0.2.0)",
 ]
+
+
 
 [project.scripts]
 fnsft = "functionalnetworkssft.fnsft_trainer:main"
-check-hf-token = "functionalnetworkssft.check_hf_token:main"
+check-hf-token = "functionalnetworkssft.utils.hf_utilities:main"
+buildtemplates = "functionalnetworkssft.build_ica_templates:main"
+convert-gguf = "functionalnetworkssft.cli_gguf:main"
 
 [project.optional-dependencies]
-# CUDA-specific dependencies (NVIDIA GPUs)
-cuda = [
-    "bitsandbytes>=0.43.0",         # Quantization library (CUDA only)
-    "flash-attn>=2.5.0",            # Flash attention (CUDA only)
-]
-
-# Apple Silicon optimizations
-apple-silicon = [
-    # Currently no Apple Silicon specific packages needed
-    # MPS support is built into PyTorch 2.4+
-]
 
 # Development dependencies
 dev = [
@@ -65,21 +66,28 @@ dev = [
     "seaborn>=0.12.0",             # Statistical plotting
 ]
 
-# All optional dependencies (manually list to avoid circular dependency)
-all = [
-    # CUDA dependencies
+# Platform-specific extras (no torch/torchvision/torchaudio here)
+# CUDA systems: install CUDA wheels via scripts/setup_cuda.py first
+cuda = [
     "bitsandbytes>=0.43.0",
     "flash-attn>=2.5.0",
-    # Dev dependencies
-    "jupyter>=1.0.0",
-    "ipywidgets>=8.0.0",
-    "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
+]
+
+# Apple Silicon: install PyTorch from PyPI (includes MPS support)
+apple-silicon = [
+    "torch>=2.4.0,<3.0.0",
+]
+
+# CPU-only: install CPU wheel from PyPI
+cpu = [
+    "torch>=2.4.0,<3.0.0",
 ]
 
 [tool.poetry]
 packages = [{include = "functionalnetworkssft", from = "src"}]
 
+# Note: CUDA PyTorch installation is handled by scripts/setup_cuda.py
+# which uses the appropriate PyTorch CUDA index for the platform
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

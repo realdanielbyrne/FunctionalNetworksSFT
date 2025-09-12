@@ -209,8 +209,8 @@ class TestICATrainingIntegration(unittest.TestCase):
         use_precomputed = bool(args.ica_mask_path)
         self.assertFalse(use_precomputed)
 
-    @patch("src.functionalnetworkssft.fnsft_trainer.apply_ica_masks")
-    @patch("src.functionalnetworkssft.fnsft_trainer.compute_ica_masks_for_model")
+    @patch("src.functionalnetworkssft.ica_mask.ICAMask.apply_masks")
+    @patch("src.functionalnetworkssft.ica_mask.ICAMask.compute_masks_for_model")
     def test_ica_integration_workflow(self, mock_compute_ica, mock_apply_masks):
         """Test the complete ICA integration workflow."""
         # Mock return values
@@ -229,24 +229,29 @@ class TestICATrainingIntegration(unittest.TestCase):
         args.ica_components = 20
         args.ica_percentile = 98.0
 
-        # Simulate the workflow from main()
+        # Simulate the workflow from main() using ICAMask
+        from src.functionalnetworkssft.ica_mask import ICAMask
+
         mask_handles = []
         if args.mask_mode is not None:
+            ica_mask = ICAMask(
+                num_components=args.ica_components,
+                percentile=args.ica_percentile,
+                sample_batches=50,
+            )
+
             if args.ica_mask_path:
                 # This branch won't execute due to ica_mask_path = None
                 pass
             else:
                 # On-the-fly computation
-                mask_dict = mock_compute_ica(
+                mask_dict = ica_mask.compute_masks_for_model(
                     mock_model,
                     mock_dataset,
                     mock_tokenizer,
-                    num_components=args.ica_components,
-                    percentile=args.ica_percentile,
-                    sample_batches=50,
                 )
 
-            mask_handles = mock_apply_masks(
+            mask_handles = ica_mask.apply_masks(
                 mock_model, mask_dict, mask_mode=args.mask_mode
             )
 

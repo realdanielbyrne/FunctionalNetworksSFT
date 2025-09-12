@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import platform
+import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 from transformers.utils.quantization_config import BitsAndBytesConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import AutoPeftModelForCausalLM
 from datasets import load_dataset
 from peft import (
     LoraConfig,
@@ -22,6 +24,10 @@ from peft import (
 
 logger = logging.getLogger(__name__)
 
+# Caches to avoid redundant environment checks/logs
+_DEVICE_CACHE: Optional[Tuple[torch.device, str]] = None
+_QUANT_SUPPORT_CACHE: Optional[bool] = None
+
 
 def get_optimal_device() -> Tuple[torch.device, str]:
     """
@@ -30,21 +36,52 @@ def get_optimal_device() -> Tuple[torch.device, str]:
     Returns:
         Tuple of (device, device_name) where device_name is human-readable
     """
+    global _DEVICE_CACHE
+
+    # Return cached result to avoid repeated logging and checks
+    if _DEVICE_CACHE is not None:
+        return _DEVICE_CACHE
+
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = torch.device("cuda:0")  # Specify index for consistency
         device_name = f"CUDA ({torch.cuda.get_device_name()})"
+
+        # Log additional CUDA information (once)
+        cuda_version = torch.version.cuda
+        device_count = torch.cuda.device_count()
+        memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+
         logger.info(f"Using CUDA device: {device_name}")
-        return device, device_name
+        logger.info(f"CUDA version: {cuda_version}, Device count: {device_count}")
+        logger.info(f"GPU memory: {memory_gb:.1f} GB")
+
+        # Test basic CUDA operations to ensure compatibility (once)
+        try:
+            test_tensor = torch.randn(10, 10, device=device)
+            _ = torch.matmul(test_tensor, test_tensor)
+            logger.info("CUDA operations verified successfully")
+        except Exception as e:
+            logger.warning(f"CUDA operation test failed: {e}")
+            logger.warning("Falling back to CPU")
+            device = torch.device("cpu")
+            device_name = f"CPU ({platform.processor()})"
+
+        _DEVICE_CACHE = (device, device_name)
+        return _DEVICE_CACHE
+
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = torch.device("mps")
         device_name = "Apple Silicon MPS"
         logger.info(f"Using MPS device: {device_name}")
-        return device, device_name
+        _DEVICE_CACHE = (device, device_name)
+        return _DEVICE_CACHE
+
     else:
         device = torch.device("cpu")
         device_name = f"CPU ({platform.processor()})"
         logger.info(f"Using CPU device: {device_name}")
-        return device, device_name
+        _DEVICE_CACHE = (device, device_name)
+        return _DEVICE_CACHE
 
 
 def is_quantization_supported() -> bool:
@@ -54,20 +91,28 @@ def is_quantization_supported() -> bool:
     Returns:
         True if quantization is supported, False otherwise
     """
+    global _QUANT_SUPPORT_CACHE
+
+    if _QUANT_SUPPORT_CACHE is not None:
+        return _QUANT_SUPPORT_CACHE
+
     try:
-        import bitsandbytes
+        import bitsandbytes  # noqa: F401
 
         # BitsAndBytes requires CUDA
         if torch.cuda.is_available():
             logger.info("Quantization (BitsAndBytes) is supported")
+            _QUANT_SUPPORT_CACHE = True
             return True
         else:
             logger.warning(
                 "Quantization (BitsAndBytes) requires CUDA - not available on this platform"
             )
+            _QUANT_SUPPORT_CACHE = False
             return False
     except ImportError:
         logger.warning("BitsAndBytes not installed - quantization not available")
+        _QUANT_SUPPORT_CACHE = False
         return False
 
 
@@ -241,11 +286,141 @@ def setup_lora(
     return model
 
 
+def preprocess_dataset_for_experiments(
+    data: List[Dict[str, Any]],
+    response_max_length: int = 4000,
+    instruction_max_length: int = 2048,
+) -> List[Dict[str, Any]]:
+    """
+    Preprocess dataset by filtering based on:
+      1) Response length (response_max_length)
+      2) Combined instruction length after format conversion (instruction_max_length)
+
+    Args:
+        data: List of dataset items
+        response_max_length: Maximum allowed length for Response field (default: 4000)
+        instruction_max_length: Maximum allowed length for combined instruction (default: 2048)
+
+    Returns:
+        Filtered dataset with items that meet the length criteria
+    """
+    from .dataset_utils import DatasetFormatter
+
+    original_count = len(data)
+    logger.info(f"Starting dataset preprocessing with {original_count} examples")
+
+    # Detect dataset format for proper instruction length calculation
+    detected_format = None
+    if data:
+        try:
+            detected_format = DatasetFormatter.detect_format(data)
+            logger.info(f"Detected format for preprocessing: {detected_format}")
+        except Exception as e:
+            logger.warning(f"Could not detect format: {e}. Using basic filtering.")
+
+    # 1) Filter by Response length first
+    response_filtered_data = []
+    response_filtered_count = 0
+
+    for item in data:
+        response = item.get("Response", item.get("response", ""))
+        if len(str(response)) <= response_max_length:
+            response_filtered_data.append(item)
+        else:
+            response_filtered_count += 1
+
+    logger.info(
+        f"Filtered out {response_filtered_count} examples with Response length > {response_max_length} characters"
+    )
+
+    # Filter by combined instruction length (after format conversion)
+    final_filtered_data = []
+    instruction_filtered_count = 0
+
+    for item in response_filtered_data:
+        # Calculate the combined instruction length after format conversion
+        combined_instruction_length = 0
+
+        if detected_format:
+            try:
+                # Convert to standard format to get the actual combined instruction
+                converted_item = DatasetFormatter.convert_to_standard_format(
+                    item, detected_format
+                )
+                combined_instruction_length = len(
+                    str(converted_item.get("instruction", ""))
+                )
+            except Exception as e:
+                # Fallback: estimate combined length manually
+                logger.debug(f"Format conversion failed for item, using fallback: {e}")
+                instruction = str(item.get("instruction", item.get("Instruction", "")))
+                context = str(item.get("context", item.get("Context", "")))
+
+                if context.strip():
+                    # Add the " Context for reference: " overhead (25 characters)
+                    combined_instruction_length = len(instruction) + len(context) + 25
+                else:
+                    combined_instruction_length = len(instruction)
+        else:
+            # No format detected, use basic estimation
+            instruction = str(item.get("instruction", item.get("Instruction", "")))
+            context = str(item.get("context", item.get("Context", "")))
+
+            if context.strip():
+                combined_instruction_length = len(instruction) + len(context) + 25
+            else:
+                combined_instruction_length = len(instruction)
+
+        if combined_instruction_length <= instruction_max_length:
+            final_filtered_data.append(item)
+        else:
+            instruction_filtered_count += 1
+
+    logger.info(
+        f"Filtered out {instruction_filtered_count} examples with combined instruction length > {instruction_max_length} characters"
+    )
+
+    final_count = len(final_filtered_data)
+    total_filtered = original_count - final_count
+
+    logger.info("=" * 60)
+    logger.info("DATASET PREPROCESSING SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"Original dataset size: {original_count} examples")
+    logger.info(
+        f"Response length filter (>{response_max_length} chars): -{response_filtered_count} examples"
+    )
+    logger.info(
+        f"Combined instruction length filter (>{instruction_max_length} chars): -{instruction_filtered_count} examples"
+    )
+    logger.info(f"Total filtered out: {total_filtered} examples")
+    logger.info(f"Final dataset size: {final_count} examples")
+    logger.info(f"Retention rate: {(final_count/original_count)*100:.1f}%")
+    logger.info("=" * 60)
+
+    return final_filtered_data
+
+
 def load_dataset_from_path(
     dataset_name_or_path: str,
     dataset_config_name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Load dataset from local file or HuggingFace hub."""
+    """Load dataset from local file or HuggingFace hub (legacy function - loads train split only)."""
+    splits_data = load_dataset_with_splits(dataset_name_or_path, dataset_config_name)
+    return splits_data["train"]
+
+
+def load_dataset_with_splits(
+    dataset_name_or_path: str,
+    dataset_config_name: Optional[str] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Load dataset from local file or HuggingFace hub with proper split handling.
+
+    Returns:
+        Dictionary with split names as keys and data as values.
+        Always includes 'train' key, may include 'validation', 'test', etc.
+    """
     if os.path.isfile(dataset_name_or_path):
         logger.info(f"Loading dataset from local file: {dataset_name_or_path}")
         # Load from local file using HuggingFace datasets
@@ -263,14 +438,42 @@ def load_dataset_from_path(
             )
         else:
             raise ValueError(f"Unsupported file format: {dataset_name_or_path}")
+
         data = [item for item in dataset]
+        logger.info(f"Loaded {len(data)} examples from local file")
+        return {"train": data}
+
     else:
         logger.info(f"Loading dataset from HuggingFace hub: {dataset_name_or_path}")
-        dataset = load_dataset(dataset_name_or_path, dataset_config_name, split="train")
-        data = [item for item in dataset]
 
-    logger.info(f"Loaded {len(data)} examples")
-    return data  # type: ignore
+        # Load the full dataset to check available splits
+        try:
+            full_dataset = load_dataset(dataset_name_or_path, dataset_config_name)
+        except Exception as e:
+            logger.error(f"Failed to load dataset {dataset_name_or_path}: {e}")
+            raise
+
+        available_splits = list(full_dataset.keys())
+        logger.info(f"Available splits: {available_splits}")
+
+        splits_data = {}
+
+        # Load each available split
+        for split_name in available_splits:
+            split_data = [item for item in full_dataset[split_name]]
+            splits_data[split_name] = split_data
+            logger.info(f"Loaded {len(split_data)} examples from '{split_name}' split")
+
+        # Ensure we always have a 'train' split
+        if "train" not in splits_data:
+            # If no train split, use the first available split as train
+            first_split = available_splits[0]
+            logger.warning(
+                f"No 'train' split found. Using '{first_split}' split as training data."
+            )
+            splits_data["train"] = splits_data[first_split]
+
+        return splits_data
 
 
 def split_dataset(
@@ -288,6 +491,54 @@ def split_dataset(
     return train_data, val_data
 
 
+def prepare_train_val_splits(
+    splits_data: Dict[str, List[Dict[str, Any]]],
+    validation_split: float = 0.1,
+    prefer_existing_splits: bool = True,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Prepare training and validation data from dataset splits.
+
+    Args:
+        splits_data: Dictionary with split names as keys and data as values
+        validation_split: Fraction for validation if creating custom split
+        prefer_existing_splits: Whether to use existing validation split if available
+
+    Returns:
+        Tuple of (train_data, val_data)
+    """
+    train_data = splits_data["train"]
+    val_data = []
+
+    # Check if we should use existing validation split
+    if prefer_existing_splits:
+        # Look for validation split with common names
+        validation_split_names = ["validation", "val", "dev", "valid"]
+
+        for split_name in validation_split_names:
+            if split_name in splits_data:
+                val_data = splits_data[split_name]
+                logger.info(
+                    f"Using existing '{split_name}' split with {len(val_data)} examples for validation"
+                )
+                break
+
+    # If no existing validation split found or not preferred, create custom split
+    if not val_data and validation_split > 0:
+        logger.info(
+            f"No existing validation split found. Creating custom split with {validation_split:.1%} of training data"
+        )
+        train_data, val_data = split_dataset(train_data, validation_split)
+    elif val_data:
+        logger.info(
+            f"Using {len(train_data)} training examples and {len(val_data)} validation examples from existing splits"
+        )
+    else:
+        logger.info(f"Using {len(train_data)} training examples with no validation")
+
+    return train_data, val_data
+
+
 def save_model_and_tokenizer(
     model: Any, tokenizer: Any, output_dir: str, use_peft: Optional[bool] = None
 ) -> None:
@@ -302,14 +553,14 @@ def save_model_and_tokenizer(
         use_peft = hasattr(model, "peft_config") and model.peft_config is not None
 
     if use_peft:
-        logger.info("Saving PEFT model (adapters)")
+        # logger.info("Saving PEFT model (adapters)")
         # For PEFT models, save the adapters
         if hasattr(model, "save_pretrained"):
             model.save_pretrained(output_dir)
         else:
             logger.warning("Model does not have save_pretrained method")
     else:
-        logger.info("Saving full fine-tuned model")
+        # logger.info("Saving full fine-tuned model")
         # For full fine-tuning, save the entire model
         if hasattr(model, "save_pretrained"):
             model.save_pretrained(output_dir)
@@ -328,16 +579,118 @@ def save_model_and_tokenizer(
 
     if use_peft:
         if "adapter_config.json" in saved_files:
-            logger.info("✓ PEFT adapter configuration saved")
+            logger.info("PEFT adapter configuration saved")
         if any(f.startswith("adapter_model") for f in saved_files):
-            logger.info("✓ PEFT adapter weights saved")
+            logger.info("PEFT adapter weights saved")
     else:
         if "config.json" in saved_files:
-            logger.info("✓ Model configuration saved")
+            logger.info("Model configuration saved")
         if any(
             f.startswith("pytorch_model") or f.endswith(".safetensors")
             for f in saved_files
         ):
-            logger.info("✓ Full model weights saved")
+            logger.info("Full model weights saved")
 
-    logger.info("Model and tokenizer saved successfully")
+    # logger.info("Model and tokenizer saved successfully")
+
+
+def convert_to_gguf(
+    model_path: str, output_path: str, quantization: str = "q4_0"
+) -> None:
+    """
+    Convert model to GGUF format for Ollama compatibility.
+
+    Args:
+        model_path (str): Path to the model directory to convert
+        output_path (str): Path where the GGUF file should be saved
+        quantization (str): GGUF quantization type (e.g., "q4_0", "q8_0", "f16")
+
+    Raises:
+        FileNotFoundError: If the model path doesn't exist
+        subprocess.CalledProcessError: If the conversion command fails
+        Exception: For other conversion errors
+    """
+    try:
+        logger.info(f"Converting model to GGUF format: {quantization}")
+
+        # Validate inputs
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+
+        # Create output directory if it doesn't exist
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        # Check for llama.cpp convert script in common locations
+        candidate_scripts = [
+            "convert-hf-to-gguf.py",
+            os.path.join("scripts", "convert-hf-to-gguf.py"),
+        ]
+        convert_script = None
+        for cand in candidate_scripts:
+            if os.path.exists(cand):
+                convert_script = cand
+                break
+        if convert_script is None:
+            logger.error(
+                "convert-hf-to-gguf.py not found. Please clone llama.cpp and ensure the converter script is on PATH or placed in repo root or scripts/."
+            )
+            raise FileNotFoundError("convert-hf-to-gguf.py not found")
+
+        cmd = [
+            "python",
+            convert_script,
+            model_path,
+            "--outfile",
+            output_path,
+            "--outtype",
+            quantization,
+        ]
+
+        logger.info(f"Running GGUF conversion command: {' '.join(cmd)}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(
+                "GGUF conversion command failed with stderr:\n"
+                + (e.stderr or "<no stderr>")
+            )
+            logger.error("Stdout:\n" + (e.stdout or "<no stdout>"))
+            raise
+
+        if result.returncode == 0:
+            logger.info(f"Successfully converted to GGUF: {output_path}")
+        else:
+            logger.error(f"GGUF conversion failed: {result.stderr}")
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
+
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {e}")
+        raise
+    except subprocess.CalledProcessError as e:
+        logger.error(f"GGUF conversion command failed: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Error during GGUF conversion: {e}")
+        raise
+
+
+def merge_adapter_with_base_model(
+    adapter_path: str, output_path: str, base_model_name: Optional[str] = None
+) -> None:
+    """Merge LoRA adapter with base model to create unified model."""
+    import os
+
+    # logger.info(f"Loading PEFT model from {adapter_path}")
+    model = AutoPeftModelForCausalLM.from_pretrained(adapter_path)
+
+    # logger.info("Merging adapter with base model...")
+    merged_model = model.merge_and_unload()
+
+    logger.info(f"Saving merged model to {output_path}")
+    # Create output directory if it doesn't exist
+    os.makedirs(output_path, exist_ok=True)
+    merged_model.save_pretrained(output_path)
+
+    # logger.info("Adapter merged successfully")

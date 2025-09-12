@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.functionalnetworkssft.fnsft_trainer import apply_ica_masks
+from src.functionalnetworkssft.ica_mask import ICAMask
 
 
 class TestMaskApplication(unittest.TestCase):
@@ -56,31 +56,32 @@ class TestMaskApplication(unittest.TestCase):
                 yield self.down_proj
 
         class TestModel(nn.Module):
-            def __init__(self):
+            def __init__(self, hidden_size, intermediate_size):
                 super().__init__()
                 self.config = Mock()
-                self.config.hidden_size = self.hidden_size
+                self.config.hidden_size = hidden_size
                 self.config.n_embd = None
                 self.config.d_model = None
 
                 self.model = Mock()
                 self.model.layers = nn.ModuleList(
                     [
-                        TestBlock(self.hidden_size, self.intermediate_size),
-                        TestBlock(self.hidden_size, self.intermediate_size),
+                        TestBlock(hidden_size, intermediate_size),
+                        TestBlock(hidden_size, intermediate_size),
                     ]
                 )
 
-                self.embedding = nn.Embedding(1000, self.hidden_size)
+                self.embedding = nn.Embedding(1000, hidden_size)
 
             def get_input_embeddings(self):
                 return self.embedding
 
-        return TestModel()
+        return TestModel(self.hidden_size, self.intermediate_size)
 
     def test_mask_creation_key_mode(self):
         """Test that masks are created correctly in 'key' mode."""
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, self.mask_dict, mask_mode="key")
 
         # Should have handles for each layer
         self.assertEqual(len(handles), 2)
@@ -97,7 +98,10 @@ class TestMaskApplication(unittest.TestCase):
 
     def test_mask_creation_complement_mode(self):
         """Test that masks are created correctly in 'complement' mode."""
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="complement")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(
+            self.model, self.mask_dict, mask_mode="complement"
+        )
 
         # Should have handles for each layer
         self.assertEqual(len(handles), 2)
@@ -119,7 +123,8 @@ class TestMaskApplication(unittest.TestCase):
         original_output = down_proj(test_input)
 
         # Apply masking
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, self.mask_dict, mask_mode="key")
 
         # Forward pass with masking
         masked_output = down_proj(test_input)
@@ -172,7 +177,8 @@ class TestMaskApplication(unittest.TestCase):
     def test_hook_removal(self):
         """Test that hooks can be properly removed."""
         # Apply masks
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, self.mask_dict, mask_mode="key")
 
         # Verify hooks are registered
         for layer in self.model.model.layers:
@@ -191,7 +197,8 @@ class TestMaskApplication(unittest.TestCase):
     def test_empty_mask_dict(self):
         """Test behavior with empty mask dictionary."""
         empty_mask_dict = {}
-        handles = apply_ica_masks(self.model, empty_mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, empty_mask_dict, mask_mode="key")
 
         # Should still create handles
         self.assertEqual(len(handles), 2)
@@ -203,7 +210,8 @@ class TestMaskApplication(unittest.TestCase):
     def test_partial_mask_dict(self):
         """Test behavior with partial mask dictionary (missing some layers)."""
         partial_mask_dict = {"0": [100, 200]}  # Only layer 0
-        handles = apply_ica_masks(self.model, partial_mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, partial_mask_dict, mask_mode="key")
 
         # Should still create handles for all layers
         self.assertEqual(len(handles), 2)
@@ -215,7 +223,8 @@ class TestMaskApplication(unittest.TestCase):
     def test_mask_device_compatibility(self):
         """Test that masks work correctly across different devices."""
         # Test with CPU
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, self.mask_dict, mask_mode="key")
 
         # Create test input
         test_input = torch.randn(1, 5, self.intermediate_size)
@@ -235,7 +244,8 @@ class TestMaskApplication(unittest.TestCase):
         # Test with float32 input
         test_input_f32 = torch.randn(1, 5, self.intermediate_size, dtype=torch.float32)
 
-        handles = apply_ica_masks(self.model, self.mask_dict, mask_mode="key")
+        ica_mask = ICAMask()
+        handles = ica_mask.apply_masks(self.model, self.mask_dict, mask_mode="key")
 
         down_proj = self.model.model.layers[0].down_proj
         output_f32 = down_proj(test_input_f32)
@@ -262,7 +272,7 @@ class TestMaskHookBehavior(unittest.TestCase):
         mask = torch.ones(100)
         mask[10:20] = 0.0
 
-        # Define the hook function (copied from apply_ica_masks)
+        # Define the hook function (copied from ICAMask.apply_masks)
         def pre_hook(mod, inp, mask_tensor=mask):
             x = inp[0]
             return (x * mask_tensor.to(x.device, x.dtype),) + inp[1:]

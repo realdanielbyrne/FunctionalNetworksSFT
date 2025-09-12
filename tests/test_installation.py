@@ -25,33 +25,33 @@ def test_basic_imports():
     try:
         import torch
 
-        logger.info(f"✓ PyTorch {torch.__version__}")
+        logger.info(f"OK PyTorch {torch.__version__}")
     except ImportError as e:
-        logger.error(f"✗ PyTorch import failed: {e}")
+        logger.error(f"X PyTorch import failed: {e}")
         return False
 
     try:
         import transformers
 
-        logger.info(f"✓ Transformers {transformers.__version__}")
+        logger.info(f"OK Transformers {transformers.__version__}")
     except ImportError as e:
-        logger.error(f"✗ Transformers import failed: {e}")
+        logger.error(f"X Transformers import failed: {e}")
         return False
 
     try:
         import peft
 
-        logger.info(f"✓ PEFT {peft.__version__}")
+        logger.info(f"OK PEFT {peft.__version__}")
     except ImportError as e:
-        logger.error(f"✗ PEFT import failed: {e}")
+        logger.error(f"X PEFT import failed: {e}")
         return False
 
     try:
         import datasets
 
-        logger.info(f"✓ Datasets {datasets.__version__}")
+        logger.info(f"OK Datasets {datasets.__version__}")
     except ImportError as e:
-        logger.error(f"✗ Datasets import failed: {e}")
+        logger.error(f"X Datasets import failed: {e}")
         return False
 
     return True
@@ -69,18 +69,18 @@ def test_cross_platform_utilities():
         )
 
         device, device_name = get_optimal_device()
-        logger.info(f"✓ Optimal device: {device} ({device_name})")
+        logger.info(f"OK Optimal device: {device} ({device_name})")
 
         dtype = get_recommended_dtype()
-        logger.info(f"✓ Recommended dtype: {dtype}")
+        logger.info(f"OK Recommended dtype: {dtype}")
 
         quant_supported = is_quantization_supported()
-        logger.info(f"✓ Quantization supported: {quant_supported}")
+        logger.info(f"OK Quantization supported: {quant_supported}")
 
         return True
 
     except Exception as e:
-        logger.error(f"✗ Cross-platform utilities failed: {e}")
+        logger.error(f"X Cross-platform utilities failed: {e}")
         return False
 
 
@@ -94,19 +94,19 @@ def test_quantization_config():
         # Test with quantization enabled
         config = load_quantization_config(use_4bit=True)
         if config is not None:
-            logger.info("✓ 4-bit quantization config loaded")
+            logger.info("OK 4-bit quantization config loaded")
         else:
-            logger.info("✓ Quantization disabled (expected on non-CUDA platforms)")
+            logger.info("OK Quantization disabled (expected on non-CUDA platforms)")
 
         # Test with quantization disabled
         config = load_quantization_config(use_4bit=False, use_8bit=False)
         if config is None:
-            logger.info("✓ Quantization properly disabled")
+            logger.info("OK Quantization properly disabled")
 
         return True
 
     except Exception as e:
-        logger.error(f"✗ Quantization config test failed: {e}")
+        logger.error(f"X Quantization config test failed: {e}")
         return False
 
 
@@ -122,18 +122,20 @@ def test_platform_detection():
         )
 
         platform_info = get_platform_info()
-        logger.info(f"✓ Platform: {platform_info['system']} {platform_info['machine']}")
+        logger.info(
+            f"OK Platform: {platform_info['system']} {platform_info['machine']}"
+        )
 
         cuda_available = check_cuda_availability()
-        logger.info(f"✓ CUDA available: {cuda_available}")
+        logger.info(f"OK CUDA available: {cuda_available}")
 
         mps_available = check_mps_availability()
-        logger.info(f"✓ MPS available: {mps_available}")
+        logger.info(f"OK MPS available: {mps_available}")
 
         return True
 
     except Exception as e:
-        logger.error(f"✗ Platform detection failed: {e}")
+        logger.error(f"X Platform detection failed: {e}")
         return False
 
 
@@ -158,7 +160,7 @@ def test_model_loading():
             device_map="auto" if torch.cuda.is_available() else None,
         )
 
-        logger.info("✓ Model and tokenizer loaded successfully")
+        logger.info("OK Model and tokenizer loaded successfully")
 
         # Clean up
         del model
@@ -169,7 +171,7 @@ def test_model_loading():
         return True
 
     except Exception as e:
-        logger.error(f"✗ Model loading failed: {e}")
+        logger.error(f"X Model loading failed: {e}")
         return False
 
 
@@ -213,10 +215,10 @@ def main():
     logger.info(f"\nPassed: {passed}/{len(results)} tests")
 
     if passed == len(results):
-        logger.info("🎉 All tests passed! Installation is working correctly.")
+        logger.info("All tests passed! Installation is working correctly.")
         return 0
     else:
-        logger.error("❌ Some tests failed. Please check the installation.")
+        logger.error("Some tests failed. Please check the installation.")
         return 1
 
 

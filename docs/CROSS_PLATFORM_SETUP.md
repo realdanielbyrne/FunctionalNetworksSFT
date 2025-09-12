@@ -36,21 +36,24 @@ This installs the core dependencies that work across all platforms.
 #### For CUDA Systems (NVIDIA GPUs)
 
 **Requirements:**
+
 - NVIDIA GPU with CUDA Compute Capability 5.0 or higher
 - CUDA 12.1 or compatible version
 - Sufficient GPU memory (8GB+ recommended for training)
 
 **Installation:**
+
 ```bash
 # Install PyTorch with CUDA support
 poetry run pip uninstall torch torchvision torchaudio -y
-poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Install CUDA-specific dependencies
 poetry install --extras cuda
 ```
 
 **Features Available:**
+
 - ✅ GPU acceleration via CUDA
 - ✅ BitsAndBytes quantization (4-bit/8-bit)
 - ✅ Flash Attention (if compatible)
@@ -59,17 +62,20 @@ poetry install --extras cuda
 #### For Apple Silicon Macs
 
 **Requirements:**
+
 - Apple Silicon Mac (M1/M2/M3/M4)
 - macOS 12.3 or later
 - Sufficient unified memory (16GB+ recommended)
 
 **Installation:**
+
 ```bash
 # Base installation already includes MPS support
 poetry install --extras apple-silicon
 ```
 
 **Features Available:**
+
 - ✅ GPU acceleration via Metal Performance Shaders (MPS)
 - ✅ Mixed precision training (fp16)
 - ❌ BitsAndBytes quantization (not supported)
@@ -80,12 +86,14 @@ poetry install --extras apple-silicon
 #### For CPU-Only Systems
 
 **Installation:**
+
 ```bash
 # Base installation provides CPU support
 poetry install
 ```
 
 **Features Available:**
+
 - ✅ CPU training (slower but functional)
 - ✅ Full precision training (fp32)
 - ❌ GPU acceleration
@@ -101,6 +109,7 @@ poetry run python utils/platform_setup.py
 ```
 
 This will display:
+
 - Platform information
 - Available accelerators (CUDA/MPS/CPU)
 - Library versions
@@ -157,7 +166,9 @@ You can override automatic detection:
 ### CUDA Issues
 
 **Problem**: CUDA out of memory
-**Solution**: 
+
+**Solution**:
+
 - Reduce batch size
 - Enable gradient checkpointing
 - Use 4-bit quantization
@@ -169,13 +180,16 @@ You can override automatic detection:
 ### Apple Silicon Issues
 
 **Problem**: MPS not available
-**Solution**: 
+
+**Solution**:
+
 - Update to macOS 12.3+
 - Ensure PyTorch 2.0+
 - Check system compatibility
 
 **Problem**: Memory issues
 **Solution**:
+
 - Close other applications
 - Use smaller batch sizes
 - Enable gradient checkpointing
@@ -183,7 +197,8 @@ You can override automatic detection:
 ### General Issues
 
 **Problem**: Import errors
-**Solution**: 
+**Solution**:
+
 - Verify Poetry environment: `poetry env info`
 - Reinstall dependencies: `poetry install --sync`
 - Check Python version compatibility
@@ -191,16 +206,19 @@ You can override automatic detection:
 ## Performance Optimization
 
 ### CUDA Systems
+
 - Use mixed precision training (`--fp16 true` or `--bf16 true`)
 - Enable gradient checkpointing for large models
 - Use 4-bit quantization for memory efficiency
 
 ### Apple Silicon
+
 - Use fp16 precision (`--torch_dtype float16`)
 - Leverage unified memory with larger batch sizes
 - Monitor memory usage with Activity Monitor
 
 ### All Platforms
+
 - Use gradient accumulation for effective larger batch sizes
 - Enable early stopping to prevent overfitting
 - Use learning rate scheduling

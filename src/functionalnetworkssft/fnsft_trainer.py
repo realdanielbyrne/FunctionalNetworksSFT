@@ -23,8 +23,9 @@ Author: Daniel Byrne
 License: MIT
 """
 
+from __future__ import annotations
+
 import argparse
-import json
 import logging
 import os
 import sys
@@ -34,14 +35,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union, Any, Literal
 import warnings
 
+# Disable tokenizer parallelism to avoid forking warnings
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset
 import transformers
 from transformers.utils.quantization_config import BitsAndBytesConfig
 from transformers.training_args import TrainingArguments
 from transformers.trainer import Trainer
-from transformers.data.data_collator import DataCollatorForLanguageModeling
 from transformers.trainer_callback import EarlyStoppingCallback
 from transformers import (
     AutoTokenizer,
@@ -49,505 +51,359 @@ from transformers import (
 )
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.modeling_utils import PreTrainedModel
-from datasets import load_dataset
+from datasets import load_dataset, Dataset as HFDataset, load_from_disk
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
-from huggingface_hub import HfApi, login, whoami
-from huggingface_hub.errors import RepositoryNotFoundError, HfHubHTTPError
 import wandb
-from tqdm.auto import tqdm
 
-# ===================== ICA helpers =====================
-from sklearn.decomposition import FastICA
-import numpy as np
-import json
-from collections import defaultdict
-import itertools
-
+# Import whoami at module level for testing
+try:
+    from huggingface_hub import whoami
+except ImportError:
+    whoami = None
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("sft_training.log"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-logger = logging.getLogger(__name__)
+
+# ======================== Logging ========================
 
 
-def load_env_file():
-    """Load environment variables from .env file if it exists."""
-    env_file = Path(".env")
-    if env_file.exists():
-        logger.info(f"Loading environment variables from {env_file}")
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    # Remove quotes if present
-                    value = value.strip('"').strip("'")
-                    os.environ[key] = value
-                    if key == "HF_TOKEN":
-                        logger.info(
-                            f"Loaded HF_TOKEN from .env file: {value[:8]}...{value[-8:]}"
-                        )
-    else:
-        logger.debug("No .env file found")
+def setup_logging(log_file: Optional[str] = "sft_training.log") -> logging.Logger:
+    """Set up root logging (idempotent)."""
+    root = logging.getLogger()
+    if not root.handlers:
+        level = os.getenv("SFT_LOG_LEVEL", "INFO").upper()
+        handlers = [logging.StreamHandler(sys.stdout)]
+        if log_file:
+            handlers.append(logging.FileHandler(log_file))
+        logging.basicConfig(
+            level=getattr(logging, level, logging.INFO),
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            handlers=handlers,
+        )
+    return logging.getLogger(__name__)
+
+
+logger = setup_logging()
+
+
+# Log-once guard for template format messages
+_TEMPLATE_DECISION_LOGGED = False
+
+
+def load_env_file() -> None:
+    """Load env vars from .env if present."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ[k] = v.strip().strip('"').strip("'")
 
 
 @dataclass
 class ModelArguments:
-    """Arguments for model configuration."""
-
     model_name_or_path: str = field(
-        metadata={
-            "help": "Path to pretrained model or model identifier from huggingface.co/models"
-        }
+        metadata={"help": "Path to pretrained model or model identifier"}
     )
     use_auth_token: bool = field(
-        default=True,
-        metadata={"help": "Use HuggingFace auth token for private models"},
+        default=True, metadata={"help": "Use HF auth token for private models"}
     )
     trust_remote_code: bool = field(
-        default=True, metadata={"help": "Trust remote code when loading model"}
+        default=True, metadata={"help": "Trust remote code"}
     )
     torch_dtype: str = field(
         default="auto",
+        metadata={"help": "auto, float16, bfloat16, float32"},
+    )
+    attn_implementation: str = field(
+        default="auto",
+        metadata={"help": "auto, eager, sdpa, flash_attention_2"},
+    )
+    attn_implementation: str = field(
+        default="auto",
         metadata={
-            "help": "Torch dtype for model loading (auto, float16, bfloat16, float32)"
+            "help": "Attention kernel implementation to request (auto, eager, sdpa, flash_attention_2)."
         },
     )
 
 
 @dataclass
 class DataArguments:
-    """Arguments for data configuration."""
-
     dataset_name_or_path: str = field(
-        metadata={"help": "Path to dataset file or HuggingFace dataset name"}
+        metadata={"help": "Path to dataset file or HF dataset name"}
     )
-    dataset_config_name: Optional[str] = field(
-        default=None, metadata={"help": "Configuration name for HuggingFace dataset"}
-    )
-    max_seq_length: int = field(
-        default=2048, metadata={"help": "Maximum sequence length for tokenization"}
-    )
+    dataset_config_name: Optional[str] = field(default=None)
+    max_seq_length: int = field(default=2048)
     instruction_template: str = field(
-        default="### Instruction:\n{instruction}\n\n### Response:\n{response}",
-        metadata={"help": "Template for formatting instruction-response pairs"},
+        default="### Instruction:\n{instruction}\n\n### Response:\n{response}"
     )
-    validation_split: float = field(
-        default=0.1, metadata={"help": "Fraction of data to use for validation"}
-    )
-    auto_detect_format: bool = field(
-        default=True,
-        metadata={"help": "Automatically detect and convert dataset format"},
-    )
-    template_format: str = field(
-        default="auto",
-        metadata={"help": "Template format to use: auto, chat, alpaca, chatml, basic"},
-    )
+    validation_split: float = field(default=0.1)
+    use_existing_splits: bool = field(default=True)
+    auto_detect_format: bool = field(default=True)
+    template_format: str = field(default="auto")  # auto, chat, alpaca, chatml, basic
+    response_max_length: int = field(default=4000)
+    instruction_max_length: int = field(default=2048)
 
 
 @dataclass
 class QuantizationArguments:
-    """Arguments for quantization configuration."""
-
-    use_4bit: bool = field(default=True, metadata={"help": "Use 4-bit quantization"})
-    use_8bit: bool = field(
-        default=False,
-        metadata={"help": "Use 8-bit quantization (overrides 4-bit if True)"},
-    )
-    bnb_4bit_compute_dtype: str = field(
-        default="float16", metadata={"help": "Compute dtype for 4-bit quantization"}
-    )
-    bnb_4bit_quant_type: str = field(
-        default="nf4", metadata={"help": "Quantization type for 4-bit (nf4, fp4)"}
-    )
-    bnb_4bit_use_double_quant: bool = field(
-        default=True, metadata={"help": "Use double quantization for 4-bit"}
-    )
+    use_4bit: bool = field(default=False)
+    use_8bit: bool = field(default=True)
+    bnb_4bit_compute_dtype: str = field(default="float16")
+    bnb_4bit_quant_type: str = field(default="nf4")  # nf4, fp4
+    bnb_4bit_use_double_quant: bool = field(default=True)
 
 
 @dataclass
 class LoRAArguments:
-    """Arguments for LoRA configuration."""
-
-    use_peft: bool = field(
-        default=True,
-        metadata={
-            "help": "Use Parameter-Efficient Fine-Tuning (LoRA/QLoRA). If False, performs full parameter fine-tuning."
-        },
-    )
-    lora_r: int = field(default=16, metadata={"help": "LoRA rank"})
-    lora_alpha: int = field(default=32, metadata={"help": "LoRA alpha parameter"})
-    lora_dropout: float = field(default=0.1, metadata={"help": "LoRA dropout"})
-    lora_target_modules: Optional[List[str]] = field(
-        default=None,
-        metadata={"help": "Target modules for LoRA (auto-detected if None)"},
-    )
-    lora_bias: Literal["none", "all", "lora_only"] = field(
-        default="none", metadata={"help": "LoRA bias type (none, all, lora_only)"}
-    )
+    use_peft: bool = field(default=True)
+    lora_r: int = field(default=16)
+    lora_alpha: int = field(default=32)
+    lora_dropout: float = field(default=0.1)
+    lora_target_modules: Optional[List[str]] = field(default=None)
+    lora_bias: Literal["none", "all", "lora_only"] = field(default="none")
 
 
-# Import shared utilities
-from .utils.dataset_utils import DatasetFormatter
+# ======================== Utilities from local modules ========================
+from .utils.dataset_utils import DatasetFormatter, InstructionDataset
 from .utils.model_utils import (
+    convert_to_gguf,
     get_optimal_device,
     get_recommended_dtype,
     is_quantization_supported,
-    load_quantization_config,
-    setup_lora,
     load_dataset_from_path,
-    split_dataset,
+    load_dataset_with_splits,
+    load_quantization_config,
+    merge_adapter_with_base_model,
+    prepare_train_val_splits,
+    preprocess_dataset_for_experiments,
     save_model_and_tokenizer,
+    setup_lora,
+    split_dataset,
 )
 
+from .utils.hf_utilities import upload_to_hub
 
-def apply_ica_masks(
-    model: PreTrainedModel, mask_dict: dict[str, list[int]], mask_mode: str = "key"
-):
-    """
-    Inject forward pre-hooks that multiply the *input* of each MLP
-    down-projection by a binary mask.  Implementation follows the
-    reference design  [oai_citation:1‡ICA-Based Functional Network Masking for LLM Fine-Tuning.pdf](file-service://file-78U49V8bsfQqVCbLViHD19).
-    """
-    handles = []
-    hidden_size = (
-        getattr(model.config, "hidden_size", None)
-        or getattr(model.config, "n_embd", None)
-        or getattr(model.config, "d_model", None)
-        or model.get_input_embeddings().embedding_dim
-    )
-
-    # Locate decoder blocks (works for GPT-like and Llama-like layouts)
-    if hasattr(model, "transformer"):
-        blocks = getattr(model.transformer, "h", None) or getattr(
-            model.transformer, "blocks", None
-        )
-    elif hasattr(model, "model"):
-        blocks = getattr(model.model, "layers", None) or getattr(
-            model.model, "decoder", None
-        )
-    else:
-        blocks = None
-    if blocks is None:
-        logger.warning("Could not find transformer blocks – no masking applied.")
-        return handles
-
-    for layer_idx, block in enumerate(blocks):
-        for name, module in block.modules():
-            # pick the *second* Linear in the MLP (in_features > hidden_size)
-            # Identify linear or equivalent modules by type and shape
-            if isinstance(module, torch.nn.Linear):
-                in_features, out_features = module.in_features, module.out_features
-            elif (
-                module.__class__.__name__ == "Linear8bitLt"
-            ):  # bitsandbytes quantized linear
-                in_features, out_features = module.in_features, module.out_features
-            else:
-                continue
-            if out_features == hidden_size and in_features > out_features:
-                neuron_ids = mask_dict.get(str(layer_idx), [])
-                if mask_mode == "key":  # zero the key neurons
-                    mask = torch.ones(module.in_features)
-                    mask[neuron_ids] = 0.0
-                else:  # zero everything *except* key neurons
-                    mask = torch.zeros(module.in_features)
-                    mask[neuron_ids] = 1.0
-                mask = mask.float()
-
-                def pre_hook(mod, inp, mask_tensor=mask):
-                    x = inp[0]
-                    return (x * mask_tensor.to(x.device, x.dtype),) + inp[1:]
-
-                handles.append(module.register_forward_pre_hook(pre_hook))
-                break  # stop after first matching linear in this block
-    return handles
+# Lazy import ICAMask to avoid heavy dependencies during import (e.g., in tests)
+try:
+    from .ica_mask import ICAMask  # type: ignore
+except Exception:  # pragma: no cover - only exercised when sklearn is unavailable
+    ICAMask = None  # type: ignore
 
 
-# ------------------------------------------------------------
-
-
-def compute_ica_masks_for_model(
-    model: PreTrainedModel,
-    dataset: Dataset,
-    tokenizer: PreTrainedTokenizerBase,
-    num_components: int = 20,
-    percentile: float = 98.0,
-    sample_batches: int = 100,
-):
-    """
-    Lightweight, on-the-fly ICA (FastICA) over MLP activations.
-    Adapted from the pseudocode in the paper  [oai_citation:2‡ICA-Based Functional Network Masking for LLM Fine-Tuning.pdf](file-service://file-78U49V8bsfQqVCbLViHD19).
-    Only a *sample* of the dataset is streamed to limit RAM/CPU use.
-    Returns a `mask_dict` ready for `apply_ica_masks`.
-    """
-    logger.info("Running ICA to discover functional networks – this can be slow…")
-    model.eval()
-    device = next(model.parameters()).device
-
-    # 1. collect activations
-    activations = defaultdict(list)
-    hooks = []
-
-    def capture(layer_idx):
-        def _hook(_, __, out):
-            # out: [B, T, d_int]  -> flatten B*T
-            activations[layer_idx].append(out.detach().cpu().float())
-
-        return _hook
-
-    # attach capture hooks on the MLP *intermediate* output
-    if hasattr(model, "transformer"):
-        blocks = getattr(model.transformer, "h", None) or getattr(
-            model.transformer, "blocks", None
-        )
-    else:
-        blocks = getattr(model.model, "layers", None)
-
-    for i, block in enumerate(blocks):
-        # first linear (up-proj) output lies right after activation
-        up_proj = next(
-            m
-            for n, m in block.named_modules()
-            if isinstance(m, nn.Linear) and m.out_features > m.in_features
-        )
-        hooks.append(up_proj.register_forward_hook(capture(i)))
-
-    # 2. feed a few mini-batches
-    dl = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
-    with torch.no_grad():
-        for idx, sample in enumerate(itertools.islice(dl, sample_batches)):
-            model(
-                input_ids=sample["input_ids"].to(device),
-                attention_mask=sample["attention_mask"].to(device),
-            )
-            if idx and idx % 10 == 0:
-                logger.info(f"  captured {idx}/{sample_batches} batches…")
-
-    for h in hooks:
-        h.remove()
-
-    # 3. concatenate and run ICA
-    layer_masks = {}
-    for layer_idx, acts in activations.items():
-        X = torch.cat(acts, dim=0).flatten(0, 1).numpy()  # [time, neurons]
-        ica = FastICA(n_components=num_components, random_state=0)
-        try:
-            A = ica.fit_transform(
-                X
-            ).T  # components × time  (we only need mixing matrix)
-            mixing = ica.mixing_  # [neurons, components]
-        except ValueError:
-            logger.warning(f"ICA failed on layer {layer_idx}, skipping.")
-            continue
-        # 4. pick top-|percentile| neurons across all components
-        thr = np.percentile(np.abs(mixing), percentile)
-        key_neurons = np.where(np.abs(mixing) >= thr)[0].tolist()
-        if key_neurons:
-            layer_masks[str(layer_idx)] = key_neurons
-
-    logger.info(
-        f"ICA complete – masking {sum(len(v) for v in layer_masks.values())} neurons."
-    )
-    return layer_masks
-
-
-# ============================================================
-
-
-class InstructionDataset(Dataset):
-    """Enhanced dataset class for instruction-following data with intelligent chat template handling."""
+class DataCollatorForCausalLMWithPadding:
+    """Dynamic padding + set padded labels to -100."""
 
     def __init__(
-        self,
-        data: List[Dict[str, Any]],
-        tokenizer: PreTrainedTokenizerBase,
-        max_length: int = 2048,
-        instruction_template: str = "### Instruction:\n{instruction}\n\n### Response:\n{response}",
-        auto_detect_format: bool = True,
-        template_format: str = "auto",
+        self, tokenizer: PreTrainedTokenizerBase, pad_to_multiple_of: Optional[int] = 8
     ):
-        self.data = data
         self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.instruction_template = instruction_template
-        self.auto_detect_format = auto_detect_format
-        self.template_format = template_format
+        self.pad_to_multiple_of = pad_to_multiple_of
 
-        # Set pad token if not exists
-        if getattr(tokenizer, "pad_token", None) is None:
-            eos_token = getattr(tokenizer, "eos_token", None)
-            if eos_token is not None:
-                tokenizer.pad_token = eos_token
-                # Also set pad_token_id to ensure consistency
-                if (
-                    not hasattr(tokenizer, "pad_token_id")
-                    or tokenizer.pad_token_id is None
-                ):
-                    tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
-
-        # Determine the actual template format to use
-        self.actual_template_format = self._determine_template_format()
-        logger.info(f"Using template format: {self.actual_template_format}")
-
-        # Detect and log dataset format
-        if self.auto_detect_format and data:
-            self.detected_format = DatasetFormatter.detect_format(data)
-            logger.info(f"Detected dataset format: {self.detected_format}")
-
-            # Convert first sample to show the transformation
-            if len(data) > 0:
-                sample_converted = DatasetFormatter.convert_to_standard_format(
-                    data[0], self.detected_format
-                )
-                logger.info(f"Sample conversion: {data[0]} -> {sample_converted}")
-        else:
-            self.detected_format = None
-
-    def _determine_template_format(self) -> str:
-        """Determine the actual template format to use based on the template_format setting."""
-        if self.template_format == "auto":
-            # Check if tokenizer has a chat template
-            if (
-                hasattr(self.tokenizer, "chat_template")
-                and self.tokenizer.chat_template is not None
-            ):
-                logger.info(
-                    "Auto-detected tokenizer chat template, using 'chat' format"
-                )
-                return "chat"
-            else:
-                logger.info(
-                    "No tokenizer chat template found, falling back to 'basic' format"
-                )
-                return "basic"
-        elif self.template_format == "chat":
-            # Force use of chat template
-            if (
-                not hasattr(self.tokenizer, "chat_template")
-                or self.tokenizer.chat_template is None
-            ):
-                raise ValueError(
-                    "Chat template format requested but tokenizer does not have a chat_template attribute"
-                )
-            return "chat"
-        elif self.template_format in ["alpaca", "chatml", "basic"]:
-            return self.template_format
-        else:
-            raise ValueError(
-                f"Invalid template_format: {self.template_format}. "
-                f"Must be one of: auto, chat, alpaca, chatml, basic"
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        feats = [
+            {
+                "input_ids": (
+                    f["input_ids"].tolist()
+                    if isinstance(f["input_ids"], torch.Tensor)
+                    else f["input_ids"]
+                ),
+                "attention_mask": (
+                    f["attention_mask"].tolist()
+                    if isinstance(f["attention_mask"], torch.Tensor)
+                    else f["attention_mask"]
+                ),
+            }
+            for f in features
+        ]
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*using the `__call__` method is faster.*"
             )
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        item = self.data[idx]
-
-        # Convert to standard format if auto-detection is enabled
-        if self.auto_detect_format and self.detected_format:
-            try:
-                converted_item = DatasetFormatter.convert_to_standard_format(
-                    item, self.detected_format
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to convert item {idx}: {e}. Using original format."
-                )
-                converted_item = item
-        else:
-            converted_item = item
-
-        # Extract instruction and response
-        instruction = None
-        response = None
-
-        if "instruction" in converted_item and "response" in converted_item:
-            instruction = converted_item["instruction"]
-            response = converted_item["response"]
-        elif "text" in converted_item:
-            # If we have pre-formatted text, use it directly
-            text = converted_item["text"]
-        else:
-            # Fallback for legacy behavior
-            if "instruction" in item and "response" in item:
-                instruction = item["instruction"]
-                response = item["response"]
-            elif "text" in item:
-                text = item["text"]
+            be = self.tokenizer.pad(
+                feats,
+                padding=True,
+                pad_to_multiple_of=self.pad_to_multiple_of,
+                return_tensors="pt",
+            )
+        # Convert to dict and ensure all values are tensors
+        batch: Dict[str, torch.Tensor] = {}
+        for key, value in be.items():
+            if isinstance(value, torch.Tensor):
+                batch[key] = value
             else:
-                raise ValueError(
-                    f"Dataset item {idx} must contain either 'instruction'+'response' or 'text' fields. "
-                    f"Available keys: {list(item.keys())}"
-                )
+                batch[key] = torch.tensor(value)
 
-        # Format the text based on the template format
-        if instruction is not None and response is not None:
-            text = self._format_text(instruction, response)
-        # If text is already set from above, use it as-is
+        # Create labels from input_ids
+        labels = batch["input_ids"].clone()
+        if getattr(self.tokenizer, "pad_token_id", None) is not None:
+            labels[batch["input_ids"] == self.tokenizer.pad_token_id] = -100
+        else:
+            labels[batch["attention_mask"] == 0] = -100
+        batch["labels"] = labels
+        return batch
 
-        # Tokenize
-        encoding = self.tokenizer.__call__(
-            text,
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_length,
-            return_tensors="pt",
-        )
-        input_ids = encoding["input_ids"].squeeze()
-        attention_mask = encoding["attention_mask"].squeeze()
 
-        # Create labels with padding tokens set to -100 to ignore them in loss calculation
-        labels = input_ids.clone()
-        if self.tokenizer.pad_token_id is not None:
-            labels[labels == self.tokenizer.pad_token_id] = -100
+def create_pretokenization_function(
+    tokenizer: PreTrainedTokenizerBase,
+    max_length: int,
+    instruction_template: str,
+    template_format: str,
+    detected_format: Optional[tuple],
+    auto_detect_format: bool,
+):
+    if template_format == "auto":
+        actual = "chat" if getattr(tokenizer, "chat_template", None) else "basic"
+    else:
+        actual = template_format
 
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-        }
-
-    def _format_text(self, instruction: str, response: str) -> str:
-        """Format instruction and response using the appropriate template."""
-        if self.actual_template_format == "chat":
-            # Use tokenizer's chat template
+    def _format(instruction: str, response: str) -> str:
+        if actual == "chat":
             messages = [
                 {"role": "user", "content": instruction},
                 {"role": "assistant", "content": response},
             ]
-            formatted = self.tokenizer.apply_chat_template(
+            out = tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=False
             )
-            # Ensure we return a string
-            if isinstance(formatted, str):
-                return formatted
-            else:
-                raise ValueError(
-                    f"Chat template returned non-string type: {type(formatted)}"
-                )
-        elif self.actual_template_format == "alpaca":
-            # Alpaca format
+            return out if isinstance(out, str) else str(out)
+        if actual == "alpaca":
             return f"### Instruction:\n{instruction}\n\n### Response:\n{response}"
-        elif self.actual_template_format == "chatml":
-            # ChatML format
+        if actual == "chatml":
             return f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>"
-        elif self.actual_template_format == "basic":
-            # Use the provided instruction template
-            return self.instruction_template.format(
+        if actual == "basic":
+            return instruction_template.format(
                 instruction=instruction, response=response
             )
+        raise ValueError(f"Unknown format: {actual}")
+
+    def pretokenize_item(item):
+        converted = item
+        if auto_detect_format and detected_format:
+            try:
+                converted = DatasetFormatter.convert_to_standard_format(
+                    item, detected_format
+                )
+            except Exception:
+                try:
+                    it_fmt = DatasetFormatter.detect_format([item])
+                    converted = DatasetFormatter.convert_to_standard_format(
+                        item, it_fmt
+                    )
+                except Exception:
+                    logger.debug("Per-item detection failed; keeping original.")
+                    converted = item
+
+        if "instruction" in converted and "response" in converted:
+            text = _format(converted["instruction"], converted["response"])
+        elif "text" in converted:
+            text = converted["text"]
+        elif "instruction" in item and "response" in item:
+            text = _format(item["instruction"], item["response"])
+        elif "text" in item:
+            text = item["text"]
         else:
-            raise ValueError(f"Unknown template format: {self.actual_template_format}")
+            raise ValueError("Item must contain 'instruction'+'response' or 'text'.")
+
+        enc = tokenizer(
+            text,
+            truncation=True,
+            padding=False,
+            max_length=max_length,
+            return_tensors=None,
+        )
+        return {
+            "input_ids": enc["input_ids"],
+            "attention_mask": enc["attention_mask"],
+            "labels": enc["input_ids"],
+        }
+
+    return pretokenize_item
+
+
+def get_cache_key(
+    dataset_path: str,
+    tokenizer_name: str,
+    template_format: str,
+    max_seq_length: int,
+    detected_format: Optional[tuple],
+    instruction_template: str,
+) -> str:
+    """Generate a cache key for pre-tokenized datasets."""
+    import hashlib
+
+    key_parts = [
+        dataset_path,
+        tokenizer_name,
+        template_format,
+        str(max_seq_length),
+        str(detected_format),
+        instruction_template,
+    ]
+    key_string = "|".join(key_parts)
+    return hashlib.md5(key_string.encode()).hexdigest()
+
+
+def pretokenize_and_cache_dataset(
+    data: List[Dict[str, Any]],
+    tokenizer: PreTrainedTokenizerBase,
+    data_args: DataArguments,
+    detected_format: Optional[tuple],
+    cache_dir: str,
+    split_name: str,
+) -> List[Dict[str, Any]]:
+    """Pre-tokenize dataset and cache results to disk."""
+
+    # Generate cache key
+    cache_key = get_cache_key(
+        dataset_path=data_args.dataset_name_or_path,
+        tokenizer_name=tokenizer.name_or_path,
+        template_format=data_args.template_format,
+        max_seq_length=data_args.max_seq_length,
+        detected_format=detected_format,
+        instruction_template=data_args.instruction_template,
+    )
+
+    cache_path = os.path.join(cache_dir, f"{split_name}_{cache_key}")
+
+    if os.path.exists(cache_path):
+        try:
+            logger.info(
+                f"Loading pre-tokenized {split_name} dataset from cache: {cache_path}"
+            )
+            cached_dataset = load_from_disk(cache_path)
+            return [item for item in cached_dataset]
+        except Exception as e:
+            logger.warning(f"Failed to load cached dataset: {e}. Re-tokenizing...")
+
+    logger.info(f"Pre-tokenizing {split_name} dataset ({len(data)} examples)...")
+    hf_dataset = HFDataset.from_list(data)
+
+    pretokenize_fn = create_pretokenization_function(
+        tokenizer=tokenizer,
+        max_length=data_args.max_seq_length,
+        instruction_template=data_args.instruction_template,
+        template_format=data_args.template_format,
+        detected_format=detected_format,
+        auto_detect_format=data_args.auto_detect_format,
+    )
+
+    tokenized_dataset = hf_dataset.map(
+        pretokenize_fn,
+        remove_columns=hf_dataset.column_names,
+        num_proc=min(4, os.cpu_count() or 1),
+        desc=f"Pre-tokenizing {split_name}",
+    )
+
+    os.makedirs(cache_dir, exist_ok=True)
+    tokenized_dataset.save_to_disk(cache_path)
+    logger.info(f"Cached pre-tokenized {split_name} dataset to: {cache_path}")
+
+    # Convert back to list
+    return [item for item in tokenized_dataset]
 
 
 def load_quantization_config_from_args(
@@ -563,80 +419,91 @@ def load_quantization_config_from_args(
     )
 
 
+def _parse_dtype(dtype_str: str) -> torch.dtype:
+    if dtype_str == "auto":
+        return get_recommended_dtype()
+    return {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }.get(dtype_str, torch.float16)
+
+
 def load_model_and_tokenizer(
     model_args: ModelArguments, quant_config: Optional[BitsAndBytesConfig]
 ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
-    """Load model and tokenizer with cross-platform support."""
     logger.info(f"Loading model: {model_args.model_name_or_path}")
 
-    # Get optimal device and dtype for current platform
     device, device_name = get_optimal_device()
     logger.info(f"Target device: {device_name}")
 
-    # Determine torch dtype - use platform-aware recommendation if not specified
+    torch_dtype = _parse_dtype(model_args.torch_dtype)
     if model_args.torch_dtype == "auto":
-        torch_dtype = get_recommended_dtype()
         logger.info(f"Auto-selected dtype: {torch_dtype}")
-    else:
-        torch_dtype = torch.float16
-        if model_args.torch_dtype == "bfloat16":
-            torch_dtype = torch.bfloat16
-        elif model_args.torch_dtype == "float32":
-            torch_dtype = torch.float32
 
-    # Get authentication token
-    auth_token = None
+    # Auth token resolution
+    auth_token: Optional[Union[str, bool]] = None
     if model_args.use_auth_token:
-        # First try environment variable
         auth_token = os.getenv("HF_TOKEN")
         if auth_token:
             logger.info("Using HF_TOKEN from environment")
         else:
-            # Try to use cached credentials from huggingface-cli login
             try:
-                from huggingface_hub import whoami
+                if whoami is not None:
+                    _ = whoami()  # uses cached creds if available
+                    auth_token = True
+                    logger.info("Using cached HuggingFace credentials")
+            except Exception:
+                logger.warning("No HF token found; proceeding without auth")
 
-                user_info = whoami()  # This will use cached token if available
-                logger.info(
-                    f"Using cached HuggingFace credentials for user: {user_info['name']}"
-                )
-                auth_token = (
-                    True  # Set to True to indicate we should use cached credentials
-                )
-            except Exception as e:
-                logger.warning(
-                    f"No HF_TOKEN environment variable and no cached credentials found: {e}"
-                )
-                auth_token = None
-
-    # Load tokenizer
+    # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
         token=auth_token,
     )
-    # Set pad token if not exists
-    if getattr(tokenizer, "pad_token", None) is None:
-        eos_token = getattr(tokenizer, "eos_token", None)
-        if eos_token is not None:
-            tokenizer.pad_token = eos_token
-            tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
+    if getattr(tokenizer, "pad_token", None) is None and getattr(
+        tokenizer, "eos_token", None
+    ):
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
 
-    # Load model with cross-platform device mapping
-    device_map = "auto" if device.type in ["cuda", "mps"] else None
+    # Device map probe
+    device_map = None
+    if device.type in {"cuda", "mps"}:
+        try:
+            test = torch.randn(10, 10).to(device)
+            _ = test @ test
+            device_map = "auto"
+            logger.info("GPU ops verified - using automatic device mapping")
+        except RuntimeError as e:
+            logger.warning(f"GPU probe failed: {e} - falling back to manual placement")
+
+    model_kwargs: Dict[str, Any] = {
+        "quantization_config": quant_config,
+        "torch_dtype": torch_dtype,
+        "trust_remote_code": model_args.trust_remote_code,
+        "token": auth_token,
+        "device_map": device_map,
+    }
+    if model_args.attn_implementation != "auto":
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+        logger.info(f"Attention implementation: {model_args.attn_implementation}")
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path,
-        quantization_config=quant_config,
-        torch_dtype=torch_dtype,
-        trust_remote_code=model_args.trust_remote_code,
-        token=auth_token,
-        device_map=device_map,
+        model_args.model_name_or_path, **model_kwargs
     )
 
-    # Move to device if device_map wasn't used
     if device_map is None:
-        model = model.to(device)
+        try:
+            model = model.to(device)
+            logger.info(f"Model moved to {device}")
+        except RuntimeError as e:
+            if device.type == "cuda":
+                logger.warning(f"Failed to move model to CUDA: {e} -> CPU fallback")
+                model = model.to(torch.device("cpu"))
+            else:
+                raise
 
     return model, tokenizer
 
@@ -657,8 +524,18 @@ def setup_lora_from_args(
 
 
 def load_dataset_from_args(data_args: DataArguments) -> List[Dict[str, Any]]:
-    """Load dataset from arguments."""
+    """Load dataset from arguments (legacy function - loads train split only)."""
     return load_dataset_from_path(
+        dataset_name_or_path=data_args.dataset_name_or_path,
+        dataset_config_name=data_args.dataset_config_name,
+    )
+
+
+def load_dataset_with_splits_from_args(
+    data_args: DataArguments,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Load dataset with all available splits from arguments."""
+    return load_dataset_with_splits(
         dataset_name_or_path=data_args.dataset_name_or_path,
         dataset_config_name=data_args.dataset_config_name,
     )
@@ -671,38 +548,22 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
     logger.info("=" * 60)
 
     if use_peft:
-        logger.info("🔧 Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
-        logger.info("📊 Benefits:")
-        logger.info("   • Significantly reduced memory usage")
-        logger.info("   • Faster training and inference")
-        logger.info("   • Smaller model artifacts (adapters only)")
-        logger.info("   • Reduced risk of catastrophic forgetting")
-        logger.info("📋 Adapter Configuration:")
+        logger.info("Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
+        logger.info("Adapter Configuration:")
         if hasattr(model, "peft_config") and model.peft_config:
-            logger.info(f"   • PEFT adapters configured and active")
+            logger.info("   - PEFT adapters configured and active")
         else:
-            logger.info(f"   • No PEFT configuration detected")
+            logger.info("   - No PEFT configuration detected")
     else:
-        logger.info("🔧 Training Mode: Full Parameter Fine-Tuning")
-        logger.info("⚠️  Resource Requirements:")
-        logger.info("   • High memory usage (all parameters trainable)")
-        logger.info("   • Longer training time")
-        logger.info("   • Large model artifacts (full model)")
-        logger.info("   • Higher risk of catastrophic forgetting")
-        logger.info("💡 Recommendations:")
-        logger.info("   • Ensure sufficient GPU memory")
-        logger.info("   • Consider gradient checkpointing")
-        logger.info("   • Use lower learning rates")
-        logger.info("   • Monitor for overfitting")
+        logger.info("Training Mode: Full Parameter Fine-Tuning")
 
-    # Log memory information if available
     if torch.cuda.is_available():
         try:
             memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
             memory_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
-            logger.info(f"🖥️  GPU Memory Usage:")
-            logger.info(f"   • Allocated: {memory_allocated:.2f} GB")
-            logger.info(f"   • Reserved: {memory_reserved:.2f} GB")
+            logger.info(f"GPU Memory Usage:")
+            logger.info(f"   - Allocated: {memory_allocated:.2f} GB")
+            logger.info(f"   - Reserved: {memory_reserved:.2f} GB")
         except Exception as e:
             logger.debug(f"Could not get GPU memory info: {e}")
 
@@ -713,6 +574,18 @@ def adjust_training_args_for_mode(
     training_args: TrainingArguments, use_peft: bool
 ) -> TrainingArguments:
     """Adjust training arguments based on whether PEFT or full fine-tuning is used."""
+    # Check if we're on MPS (Apple Silicon)
+    device, _ = get_optimal_device()
+    is_mps = device.type == "mps"
+
+    if use_peft and is_mps:
+        # PEFT on MPS has gradient computation issues with gradient checkpointing
+        if training_args.gradient_checkpointing:
+            logger.warning(
+                "Disabling gradient checkpointing for PEFT on MPS due to gradient computation issues"
+            )
+            training_args.gradient_checkpointing = False
+
     if not use_peft:
         # For full fine-tuning, we might want to adjust some parameters
         logger.info("Adjusting training arguments for full parameter fine-tuning")
@@ -730,12 +603,16 @@ def adjust_training_args_for_mode(
             )
             training_args.learning_rate = new_lr
 
-        # Ensure gradient checkpointing is enabled for memory efficiency
-        if not training_args.gradient_checkpointing:
+        # Ensure gradient checkpointing is enabled for memory efficiency (except on MPS if problematic)
+        if not training_args.gradient_checkpointing and not is_mps:
             logger.info(
                 "Enabling gradient checkpointing for full fine-tuning memory efficiency"
             )
             training_args.gradient_checkpointing = True
+        elif is_mps:
+            logger.info(
+                "Gradient checkpointing may cause issues on MPS - keeping current setting"
+            )
 
         # Adjust warmup ratio for full fine-tuning
         if training_args.warmup_ratio == 0.03:  # Default value
@@ -756,11 +633,8 @@ def create_trainer(
     train_dataset: Dataset,
     eval_dataset: Optional[Dataset],
     training_args: TrainingArguments,
-    data_collator: DataCollatorForLanguageModeling,
+    data_collator,
 ) -> Trainer:
-    """Create and configure the trainer."""
-
-    # Add early stopping callback
     callbacks = [EarlyStoppingCallback(early_stopping_patience=3)]
 
     trainer = Trainer(
@@ -776,255 +650,18 @@ def create_trainer(
     return trainer
 
 
-# save_model_and_tokenizer is now imported from utils.model_utils
-
-
-def convert_to_gguf(
-    model_path: str, output_path: str, quantization: str = "q4_0"
-) -> None:
-    """Convert model to GGUF format for Ollama compatibility."""
-    try:
-        import subprocess
-
-        logger.info(f"Converting model to GGUF format: {quantization}")
-
-        # Check if llama.cpp convert script exists
-        convert_script = "convert-hf-to-gguf.py"
-
-        cmd = [
-            "python",
-            convert_script,
-            model_path,
-            "--outfile",
-            output_path,
-            "--outtype",
-            quantization,
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            logger.info(f"Successfully converted to GGUF: {output_path}")
-        else:
-            logger.error(f"GGUF conversion failed: {result.stderr}")
-
-    except ImportError:
-        logger.warning("llama.cpp not available for GGUF conversion")
-    except Exception as e:
-        logger.error(f"Error during GGUF conversion: {e}")
-
-
 def load_config_from_yaml(config_path: str) -> Dict[str, Any]:
-    """Load configuration from YAML file."""
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    return config
+        return yaml.safe_load(f)
 
 
-def upload_to_hub(
-    model_path: str,
-    tokenizer: PreTrainedTokenizerBase,
-    repo_id: str,
-    commit_message: Optional[str] = None,
-    private: bool = False,
-    token: Optional[str] = None,
-    push_adapter_only: bool = False,
-    use_peft: Optional[bool] = None,
-) -> None:
-    try:
-        logger.info(f"Starting upload to Hugging Face Hub: {repo_id}")
-
-        # Validate inputs
-        if not repo_id or "/" not in repo_id:
-            raise ValueError(
-                "repo_id must be in format 'username/repository-name' or 'organization/repository-name'"
-            )
-
-        if not os.path.exists(model_path):
-            raise ValueError(f"Model path does not exist: {model_path}")
-
-        # Auto-detect training mode if not specified
-        if use_peft is None:
-            use_peft = os.path.exists(os.path.join(model_path, "adapter_config.json"))
-            logger.info(
-                f"Auto-detected training mode: {'PEFT' if use_peft else 'Full fine-tuning'}"
-            )
-
-        # Set default commit message based on training mode
-        if commit_message is None:
-            if use_peft:
-                commit_message = "Upload fine-tuned model with LoRA adapters"
-            else:
-                commit_message = "Upload full fine-tuned model"
-
-        # Handle authentication
-        if token is None:
-            token = os.getenv("HF_TOKEN")
-
-        if token is None:
-            logger.info(
-                "No HF_TOKEN found in environment. Attempting to use cached credentials..."
-            )
-            try:
-                # Check if user is already logged in
-                user_info = whoami(token=token)
-                logger.info(f"Using cached credentials for user: {user_info['name']}")
-            except Exception:
-                logger.info(
-                    "No cached credentials found. Please log in to Hugging Face Hub..."
-                )
-                login()
-        else:
-            logger.info("Using provided authentication token")
-
-        # Initialize HF API
-        api = HfApi(token=token)
-
-        # Check if repository exists, create if it doesn't
-        try:
-            api.repo_info(repo_id=repo_id, repo_type="model")
-            logger.info(f"Repository {repo_id} exists")
-        except RepositoryNotFoundError:
-            logger.info(f"Creating new repository: {repo_id}")
-            api.create_repo(
-                repo_id=repo_id, repo_type="model", private=private, exist_ok=True
-            )
-
-        # Determine which files to upload based on training mode and push_adapter_only flag
-        files_to_upload = []
-
-        if push_adapter_only or (use_peft and not push_adapter_only):
-            # Upload only LoRA adapter files (either explicitly requested or PEFT mode)
-            adapter_files = [
-                "adapter_config.json",
-                "adapter_model.safetensors",
-                "adapter_model.bin",  # fallback for older format
-            ]
-
-            for file_name in adapter_files:
-                file_path = os.path.join(model_path, file_name)
-                if os.path.exists(file_path):
-                    files_to_upload.append(file_name)
-
-            if not files_to_upload:
-                if use_peft:
-                    raise ValueError(
-                        f"No LoRA adapter files found in {model_path}. Model may not be a PEFT model."
-                    )
-                else:
-                    logger.warning(
-                        f"No LoRA adapter files found in {model_path}, falling back to full model upload"
-                    )
-                    push_adapter_only = False
-
-            if files_to_upload:
-                logger.info(f"Uploading LoRA adapter files: {files_to_upload}")
-
-        if not push_adapter_only:
-            # Upload all model files (full model or full model + adapters)
-            if use_peft:
-                logger.info("Uploading full PEFT model (base model + adapters)")
-            else:
-                logger.info("Uploading full fine-tuned model")
-
-        # Upload tokenizer first
-        logger.info("Uploading tokenizer...")
-        if hasattr(tokenizer, "push_to_hub"):
-            tokenizer.push_to_hub(
-                repo_id=repo_id,
-                commit_message=f"{commit_message} - tokenizer",
-                token=token,
-                private=private,
-            )
-
-        # Upload model files
-        if push_adapter_only:
-            # Upload individual adapter files
-            for file_name in files_to_upload:
-                file_path = os.path.join(model_path, file_name)
-                logger.info(f"Uploading {file_name}...")
-                api.upload_file(
-                    path_or_fileobj=file_path,
-                    path_in_repo=file_name,
-                    repo_id=repo_id,
-                    repo_type="model",
-                    commit_message=f"{commit_message} - {file_name}",
-                    token=token,
-                )
-        else:
-            # Upload entire model directory
-            logger.info("Uploading model files...")
-
-            # Load and upload the model using transformers
-            try:
-                # Try to load as PEFT model first
-                from peft import PeftModel, AutoPeftModelForCausalLM
-
-                # Check if this is a PEFT model
-                if os.path.exists(os.path.join(model_path, "adapter_config.json")):
-                    logger.info("Detected PEFT model, uploading with PEFT support...")
-                    model = AutoPeftModelForCausalLM.from_pretrained(model_path)
-                    model.push_to_hub(
-                        repo_id=repo_id,
-                        commit_message=commit_message,
-                        token=token,
-                        private=private,
-                    )
-                else:
-                    # Regular model upload
-                    model = AutoModelForCausalLM.from_pretrained(model_path)
-                    model.push_to_hub(
-                        repo_id=repo_id,
-                        commit_message=commit_message,
-                        token=token,
-                        private=private,
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to upload using transformers: {e}")
-                logger.info("Falling back to file-by-file upload...")
-
-                # Fallback: upload directory contents
-                api.upload_folder(
-                    folder_path=model_path,
-                    repo_id=repo_id,
-                    repo_type="model",
-                    commit_message=commit_message,
-                    token=token,
-                )
-
-        logger.info(
-            f"✅ Successfully uploaded model to: https://huggingface.co/{repo_id}"
-        )
-
-    except RepositoryNotFoundError as e:
-        logger.error(f"Repository not found and could not be created: {e}")
-        raise
-    except HfHubHTTPError as e:
-        if "401" in str(e):
-            logger.error(
-                "Authentication failed. Please check your token or run 'huggingface-cli login'"
-            )
-        elif "403" in str(e):
-            logger.error(
-                "Permission denied. Check if you have write access to the repository"
-            )
-        elif "404" in str(e):
-            logger.error(
-                "Repository not found. Make sure the repository name is correct"
-            )
-        else:
-            logger.error(f"HTTP error during upload: {e}")
-        raise
-    except ValueError as e:
-        logger.error(f"Invalid input: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error during upload: {e}")
-        raise
-
-
-def main():
+def main(log_file=None):
     """Main training function."""
+    # Set up logging with custom log file if provided
+    global logger
+    if log_file:
+        logger = setup_logging(log_file)
+
     # Load environment variables from .env file if it exists
     load_env_file()
 
@@ -1042,7 +679,7 @@ def main():
     parser.add_argument(
         "--model_name_or_path",
         type=str,
-        required=True,
+        required=False,
         help="Path to pretrained model or model identifier",
     )
     parser.add_argument(
@@ -1065,7 +702,7 @@ def main():
     parser.add_argument(
         "--dataset_name_or_path",
         type=str,
-        required=True,
+        required=False,
         help="Path to dataset file or HuggingFace dataset name",
     )
     parser.add_argument(
@@ -1073,6 +710,18 @@ def main():
         type=str,
         default=None,
         help="Configuration name for HuggingFace dataset",
+    )
+
+    # Attention implementation flag
+    parser.add_argument(
+        "--attn_implementation",
+        type=str,
+        default="auto",
+        choices=["auto", "eager", "sdpa", "flash_attention_2"],
+        help=(
+            "Attention implementation for models that support it. 'auto' uses model default, "
+            "'sdpa' uses PyTorch SDPA (requires PyTorch 2.0+), 'flash_attention_2' uses Flash Attention v2 (if installed)."
+        ),
     )
     parser.add_argument(
         "--max_seq_length", type=int, default=2048, help="Maximum sequence length"
@@ -1088,6 +737,18 @@ def main():
         type=float,
         default=0.1,
         help="Fraction of data for validation",
+    )
+    parser.add_argument(
+        "--use_existing_splits",
+        action="store_true",
+        default=True,
+        help="Use existing validation/test splits from HuggingFace datasets",
+    )
+    parser.add_argument(
+        "--no_use_existing_splits",
+        dest="use_existing_splits",
+        action="store_false",
+        help="Disable using existing splits and create custom validation split",
     )
     parser.add_argument(
         "--auto_detect_format",
@@ -1111,12 +772,25 @@ def main():
         "chatml (ChatML format), basic (use instruction_template)",
     )
 
-    # Quantization arguments
     parser.add_argument(
-        "--use_4bit", action="store_true", default=True, help="Use 4-bit quantization"
+        "--response_max_length",
+        type=int,
+        default=4000,
+        help="Maximum allowed length for response field during preprocessing",
     )
     parser.add_argument(
-        "--use_8bit", action="store_true", help="Use 8-bit quantization"
+        "--instruction_max_length",
+        type=int,
+        default=2048,
+        help="Maximum allowed length for combined instruction (including context) during preprocessing",
+    )
+
+    # Quantization arguments
+    parser.add_argument(
+        "--use_4bit", action="store_true", help="Use 4-bit quantization"
+    )
+    parser.add_argument(
+        "--use_8bit", action="store_true", default=True, help="Use 8-bit quantization"
     )
     parser.add_argument(
         "--bnb_4bit_compute_dtype",
@@ -1167,11 +841,17 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        required=True,
+        required=False,
         help="Output directory for model checkpoints",
     )
     parser.add_argument(
         "--num_train_epochs", type=int, default=3, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--max_steps",
+        type=int,
+        default=-1,
+        help="Maximum number of training steps (overrides num_train_epochs if > 0)",
     )
     parser.add_argument(
         "--per_device_train_batch_size",
@@ -1206,7 +886,7 @@ def main():
     )
     parser.add_argument("--logging_steps", type=int, default=10, help="Logging steps")
     parser.add_argument(
-        "--save_steps", type=int, default=500, help="Save checkpoint steps"
+        "--save_steps", type=int, default=100, help="Save checkpoint steps"
     )
     parser.add_argument("--eval_steps", type=int, default=500, help="Evaluation steps")
     parser.add_argument(
@@ -1238,6 +918,26 @@ def main():
         default=1.0,
         help="Maximum gradient norm for gradient clipping",
     )
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        default=True,
+        help="Enable gradient checkpointing for memory efficiency",
+    )
+
+    # Pre-tokenization options
+    parser.add_argument(
+        "--pretokenize",
+        action="store_true",
+        default=False,
+        help="Enable pre-tokenization via HuggingFace datasets.map and cache to disk",
+    )
+    parser.add_argument(
+        "--pretokenize_cache_dir",
+        type=str,
+        default=None,
+        help="Directory to store/load tokenized dataset cache. Defaults to <output_dir>/tokenized_cache",
+    )
 
     # Additional options
     parser.add_argument(
@@ -1254,6 +954,12 @@ def main():
         type=str,
         default="sft-training",
         help="Weights & Biases project name",
+    )
+    parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="Custom Weights & Biases run name",
     )
     parser.add_argument(
         "--convert_to_gguf",
@@ -1291,38 +997,64 @@ def main():
         default=None,
         help="Hugging Face authentication token (or set HF_TOKEN env var)",
     )
-
     parser.add_argument(
-        "--push_adapter_only",
+        "--merge_adapter_with_base",
         action="store_true",
-        help="Only upload LoRA adapter files to Hub (not the full model)",
+        help="Merge trained LoRA adapter with base model after training completion. Saves both adapter and merged model in separate subdirectories.",
+    )
+    parser.add_argument(
+        "--upload_merged_model",
+        action="store_true",
+        help="When both --merge_adapter_with_base and --push_to_hub are enabled, upload the merged model instead of the adapter to Hub.",
     )
 
     # Masking and ICA arguments
     parser.add_argument(
         "--mask_mode",
         type=str,
-        choices=["key", "complement"],
+        choices=["lesion", "preserve", "key", "complement"],
         default=None,
-        help="When 'key' is selected, it should ablate (disable) the ICA-identified key neurons. When 'complement' is selected, it should keep only the key neurons active. When omitted, normal training should proceed without masking.",
-    )
-    parser.add_argument(
-        "--ica_mask_path",
-        type=str,
-        default=None,
-        help="A string argument defaulting to None that specifies the file path to a JSON file containing a dictionary mapping layer indices to lists of neuron indices (format: {layer-idx: [neuron-idx,…]}) as produced by an offline ICA analysis run.",
+        help="Masking polarity. Use 'lesion' (zero selected) or 'preserve' (keep selected). Legacy values 'key'/'complement' are still accepted but deprecated.",
     )
     parser.add_argument(
         "--ica_components",
         type=int,
-        default=20,
-        help="An integer argument defaulting to 20 that specifies the number of independent components to extract when ICA needs to be performed on-the-fly during training.",
+        default=5,
+        help="An integer argument that specifies the number of independent components to extract when ICA needs to be performed on-the-fly during training.",
     )
     parser.add_argument(
         "--ica_percentile",
         type=float,
         default=98.0,
-        help="A float argument defaulting to 98.0 that sets the percentile threshold (valid range 0-100) for selecting neurons within each component when ICA is executed on-the-fly.",
+        help="Percentile threshold (0-100). For selection_mode 'max_abs' and 'l2', selects neurons with scores >= this percentile. For 'topk', selects the top (100 - percentile) percent of neurons by score.",
+    )
+    parser.add_argument(
+        "--ica_mask_layers",
+        type=str,
+        default=None,
+        help="Specify which transformer layers should have ICA masking applied. Supports single layers ('0'), multiple layers ('0,3,7'), ranges ('0:4,5:6,9:'), and mixed formats ('0,2:5,8'). If not provided, ICA masking is applied to all layers (default behavior).",
+    )
+    parser.add_argument(
+        "--ica_dtype",
+        type=str,
+        default=None,
+        choices=[None, "auto", "float32", "float16", "bfloat16"],
+        help="Data type for ICA computation. None/float32 (default) uses float32 for maximum numerical stability. 'auto' matches model dtype but uses float32 for half-precision models. 'float16'/'bfloat16' use reduced precision for better performance but may affect stability.",
+    )
+
+    # new ICA Global Path arguments
+    parser.add_argument(
+        "--ica_component_ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="For --ica_mode global: list of ICA component ids to target (e.g., 0 1 2). If omitted, defaults to [0].",
+    )
+    parser.add_argument(
+        "--ica_template_path",
+        type=str,
+        default=None,
+        help="Path to global ICA templates JSON (build with build_templates_from_current_components).",
     )
 
     args = parser.parse_args()
@@ -1331,10 +1063,52 @@ def main():
     # Load configuration from YAML if provided
     if args.config:
         config = load_config_from_yaml(args.config)
-        # Override command line args with config values
+        # Config file values override defaults, but CLI args override config
+        # Store original CLI args that were explicitly provided
+        original_argv = sys.argv[1:]  # Exclude script name
+        explicitly_provided = set()
+
+        # Parse which arguments were explicitly provided on command line
+        i = 0
+        while i < len(original_argv):
+            arg = original_argv[i]
+            if arg.startswith("--"):
+                arg_name = arg[2:].replace("-", "_")
+                explicitly_provided.add(arg_name)
+                # Skip the value if this argument takes one
+                for action in parser._actions:
+                    if action.dest == arg_name and action.nargs != 0:
+                        i += 1  # Skip the value
+                        break
+            i += 1
+
+        # Apply config values, but don't override explicitly provided CLI args
         for key, value in config.items():
-            if not hasattr(args, key) or getattr(args, key) is None:
-                setattr(args, key, value)
+            if key not in explicitly_provided:
+                # YAML already handles type conversion correctly, so use the value as-is
+                # unless we need special handling
+                converted_value = value
+
+                # Handle special cases where YAML conversion might need adjustment
+                if value is None:
+                    # YAML null values are already None, keep them as None
+                    converted_value = None
+                elif isinstance(value, str) and value.lower() == "null":
+                    # Handle string "null" as None
+                    converted_value = None
+
+                logger.debug(
+                    f"Setting {key} from config: {converted_value} (type: {type(converted_value)})"
+                )
+                setattr(args, key, converted_value)
+
+    # Validate required arguments
+    required_args = ["model_name_or_path", "dataset_name_or_path", "output_dir"]
+    missing_args = [arg for arg in required_args if not getattr(args, arg, None)]
+    if missing_args:
+        parser.error(
+            f"The following required arguments are missing: {', '.join(missing_args)}"
+        )
 
     # Create argument dataclasses
     model_args = ModelArguments(
@@ -1342,6 +1116,7 @@ def main():
         use_auth_token=args.use_auth_token,
         trust_remote_code=args.trust_remote_code,
         torch_dtype=args.torch_dtype,
+        attn_implementation=args.attn_implementation,
     )
 
     data_args = DataArguments(
@@ -1350,8 +1125,11 @@ def main():
         max_seq_length=args.max_seq_length,
         instruction_template=args.instruction_template,
         validation_split=args.validation_split,
+        use_existing_splits=args.use_existing_splits,
         auto_detect_format=args.auto_detect_format,
         template_format=args.template_format,
+        response_max_length=args.response_max_length,
+        instruction_max_length=args.instruction_max_length,
     )
 
     quant_args = QuantizationArguments(
@@ -1373,16 +1151,72 @@ def main():
 
     # Initialize Weights & Biases if requested
     if args.use_wandb:
+        # Use custom run name if provided, otherwise use default format
+        run_name = (
+            args.wandb_run_name
+            if args.wandb_run_name
+            else f"sft-{Path(args.model_name_or_path).name}-{Path(args.dataset_name_or_path).name}"
+        )
         wandb.init(
             project=args.wandb_project,
             config=vars(args),
-            name=f"sft-{Path(args.model_name_or_path).name}-{Path(args.dataset_name_or_path).name}",
+            name=run_name,
         )
+
+    # Determine device for data loader and enable TF32 on CUDA
+    device_for_args, _ = get_optimal_device()
+    if device_for_args.type == "cuda":
+        try:
+            # Enable TF32 on matmul and cuDNN for speed on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            try:
+                # Prefer high precision matmul policy when available (PyTorch 2.0+)
+                torch.set_float32_matmul_precision("high")
+            except Exception:
+                pass
+            logger.info("Enabled TF32 (matmul/cudnn) for CUDA")
+        except Exception as e:
+            logger.debug(f"Could not enable TF32: {e}")
+    pin_memory_flag = device_for_args.type == "cuda"
+
+    # Determine optimal number of workers based on platform
+    # Windows has issues with multiprocessing spawn and CUDA libraries
+    import platform
+
+    if platform.system() == "Windows":
+        # Use fewer workers on Windows to avoid paging file issues with CUDA libraries
+        num_workers = 2
+        # logger.info("Using 2 DataLoader workers on Windows to avoid paging file issues")
+    else:
+        # Use more workers on Unix-like systems
+        num_workers = 8
+        # logger.info("Using 8 DataLoader workers on Unix-like systems")
+
+    logger.info(
+        f"DataLoader pin_memory: {pin_memory_flag} | num_workers: {num_workers} | TF32 matmul: "
+        f"{getattr(torch.backends.cuda.matmul, 'allow_tf32', None) if device_for_args.type == 'cuda' else 'N/A'} | "
+        f"TF32 cuDNN: {getattr(torch.backends.cudnn, 'allow_tf32', None) if device_for_args.type == 'cuda' else 'N/A'}"
+    )
+
+    # Select optimizer based on device and quantization support (avoid CUDA-only on MPS/CPU)
+    optim_name = (
+        "adamw_torch_fused" if device_for_args.type == "cuda" else "adamw_torch"
+    )
+    if args.use_4bit or args.use_8bit:
+        if is_quantization_supported():
+            optim_name = "paged_adamw_8bit"
+        else:
+            logger.warning(
+                "4/8-bit optimization requested but quantization not supported; falling back to adamw_torch"
+            )
+            optim_name = "adamw_torch"
 
     # Set up training arguments
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.num_train_epochs,
+        max_steps=args.max_steps,
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -1400,13 +1234,23 @@ def main():
         metric_for_best_model=args.metric_for_best_model,
         greater_is_better=args.greater_is_better,
         report_to="wandb" if args.use_wandb else None,
-        run_name=f"sft-{Path(args.model_name_or_path).name}",
+        run_name=(
+            args.wandb_run_name
+            if args.wandb_run_name
+            else f"sft-{Path(args.model_name_or_path).name}"
+        ),
         remove_unused_columns=False,
-        dataloader_pin_memory=False,
-        gradient_checkpointing=True,
+        dataloader_pin_memory=pin_memory_flag,
+        dataloader_num_workers=num_workers,
+        dataloader_persistent_workers=True,
+        dataloader_prefetch_factor=2,
+        group_by_length=True,
+        gradient_checkpointing=args.gradient_checkpointing,
         fp16=args.torch_dtype == "float16",
         bf16=args.torch_dtype == "bfloat16",
+        optim=optim_name,
         max_grad_norm=args.max_grad_norm,
+        label_names=["labels"],  # Quiet PEFT label warning
     )
 
     logger.info("Starting supervised fine-tuning...")
@@ -1419,13 +1263,6 @@ def main():
         "PEFT (LoRA/QLoRA)" if lora_args.use_peft else "Full Parameter Fine-Tuning"
     )
     logger.info(f"Training Mode: {training_mode}")
-    if not lora_args.use_peft:
-        logger.warning(
-            "Full parameter fine-tuning requires significantly more memory and compute resources!"
-        )
-        logger.warning(
-            "Consider using PEFT (--use_peft) for better resource efficiency."
-        )
 
     try:
         # Load quantization config
@@ -1443,18 +1280,89 @@ def main():
         # Adjust training arguments based on training mode
         training_args = adjust_training_args_for_mode(training_args, lora_args.use_peft)
 
-        # Load and prepare dataset
-        data = load_dataset_from_args(data_args)
-        train_data, val_data = split_dataset(data, data_args.validation_split)
+        # Load and prepare dataset with split awareness
+        if data_args.use_existing_splits:
+            splits_data = load_dataset_with_splits_from_args(data_args)
 
-        # Create datasets
+            # Apply preprocessing to all splits
+            from .utils.model_utils import preprocess_dataset_for_experiments
+
+            processed_splits = {}
+            for split_name, split_data in splits_data.items():
+                processed_data = preprocess_dataset_for_experiments(
+                    split_data,
+                    response_max_length=data_args.response_max_length,
+                    instruction_max_length=data_args.instruction_max_length,
+                )
+                processed_splits[split_name] = processed_data
+                logger.info(
+                    f"Processed {split_name} split: {len(processed_data)} examples"
+                )
+
+            # Prepare train/validation splits using existing splits if available
+            train_data, val_data = prepare_train_val_splits(
+                processed_splits,
+                data_args.validation_split,
+                prefer_existing_splits=True,
+            )
+        else:
+            logger.info("Loading dataset with single-split mode")
+            # Legacy behavior: load only train split and create custom validation split
+            data = load_dataset_from_args(data_args)
+
+            # Apply data preprocessing for experiments (filter by Context and Response lengths)
+            from .utils.model_utils import preprocess_dataset_for_experiments
+
+            data = preprocess_dataset_for_experiments(
+                data,
+                response_max_length=data_args.response_max_length,
+                instruction_max_length=data_args.instruction_max_length,
+            )
+
+            train_data, val_data = split_dataset(data, data_args.validation_split)
+
+        detected_format = None
+        if data_args.auto_detect_format and train_data:
+            detected_format = DatasetFormatter.detect_format(train_data)
+            logger.info(f"Detected dataset format: {detected_format}")
+
+        is_pretokenized = False
+        if args.pretokenize:
+            cache_dir = args.pretokenize_cache_dir or os.path.join(
+                args.output_dir, "tokenized_cache"
+            )
+
+            train_data = pretokenize_and_cache_dataset(
+                data=train_data,
+                tokenizer=tokenizer,
+                data_args=data_args,
+                detected_format=detected_format,
+                cache_dir=cache_dir,
+                split_name="train",
+            )
+
+            if val_data:
+                val_data = pretokenize_and_cache_dataset(
+                    data=val_data,
+                    tokenizer=tokenizer,
+                    data_args=data_args,
+                    detected_format=detected_format,
+                    cache_dir=cache_dir,
+                    split_name="val",
+                )
+
+            is_pretokenized = True
+            logger.info("Using pre-tokenized datasets")
+
         train_dataset = InstructionDataset(
             train_data,
             tokenizer,
             data_args.max_seq_length,
             data_args.instruction_template,
             data_args.auto_detect_format,
+            is_pretokenized,
             data_args.template_format,
+            detected_format=detected_format,
         )
 
         eval_dataset = None
@@ -1465,37 +1373,189 @@ def main():
                 data_args.max_seq_length,
                 data_args.instruction_template,
                 data_args.auto_detect_format,
+                is_pretokenized,
                 data_args.template_format,
+                detected_format=detected_format,
             )
 
-        # Create data collator
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer,
-            mlm=False,
+        data_collator = DataCollatorForCausalLMWithPadding(
+            tokenizer=tokenizer, pad_to_multiple_of=8
         )
 
-        # ---------- NEW: functional-network masking ----------
         mask_handles = []
+        # Track union of selected channels per layer and applied mask mode for static estimates
+        mask_union: Dict[str, List[int]] = {}
+        applied_mask_mode: Optional[str] = None
+
         if args.mask_mode is not None:
-            if args.ica_mask_path:
-                with open(args.ica_mask_path) as f:
-                    mask_dict = json.load(f)
-                logger.info(f"Loaded pre-computed ICA mask from {args.ica_mask_path}")
+            # Initialize ICA mask handler
+            if ICAMask is None:
+                raise ImportError(
+                    "ICAMask is not available. Please install scikit-learn to enable mask features."
+                )
+            ica_mask = ICAMask(
+                num_components=args.ica_components,
+                percentile=args.ica_percentile,
+                sample_batches=100,
+                ica_dtype=args.ica_dtype,
+                max_pca_components=1000,  # Default value for backward compatibility
+            )
+
+            # Parse layer specification if provided
+            target_layers = None
+            if args.ica_mask_layers is not None:
+                # Determine total number of layers in the model
+                total_layers = 0
+                actual_model: Any = model
+                if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+                    actual_model = model.base_model.model
+                elif hasattr(model, "base_model"):
+                    actual_model = model.base_model
+
+                if hasattr(actual_model, "transformer"):
+                    blocks = getattr(actual_model.transformer, "h", None) or getattr(
+                        actual_model.transformer, "blocks", None
+                    )
+                elif hasattr(actual_model, "model"):
+                    blocks = getattr(actual_model.model, "layers", None) or getattr(
+                        actual_model.model, "decoder", None
+                    )
+                elif hasattr(actual_model, "layers"):
+                    blocks = actual_model.layers
+                else:
+                    blocks = None
+
+                if blocks is not None:
+                    total_layers = len(blocks)
+                    try:
+                        target_layers = ica_mask.parse_layer_specification(
+                            args.ica_mask_layers, total_layers
+                        )
+                        logger.info(
+                            f"Parsed layer specification '{args.ica_mask_layers}' -> layers {target_layers}"
+                        )
+                    except ValueError as e:
+                        logger.error(
+                            f"Invalid layer specification '{args.ica_mask_layers}': {e}"
+                        )
+                        raise
+                else:
+                    logger.error(
+                        "Could not determine model architecture for layer specification"
+                    )
+                    raise ValueError(
+                        "Unable to parse layer specification: unknown model architecture"
+                    )
+
+            # Load or compute component masks
+            if args.ica_template_path:
+                logger.info(
+                    f"Loading global ICA templates from {args.ica_template_path}"
+                )
+                templates = ica_mask.load_templates(args.ica_template_path)
+                ica_mask.mask_dict_components = templates["templates"]
+                ica_mask.global_feature_layout = templates["layout"]
             else:
-                # use *training* split to estimate ICA masks quickly
+                # Use a small subset to estimate components, then build & save TEMPLATES
                 sample_for_ica = torch.utils.data.Subset(
                     train_dataset, range(min(1024, len(train_dataset)))
                 )
-                mask_dict = compute_ica_masks_for_model(
-                    model,
-                    sample_for_ica,
-                    tokenizer,
-                    num_components=args.ica_components,
-                    percentile=args.ica_percentile,
-                    sample_batches=50,
+                component_masks = ica_mask.compute_global_networks(
+                    model=model,
+                    dataset=sample_for_ica,
+                    tokenizer=tokenizer,
+                    target_layers=target_layers,
+                    n_components=args.ica_components,
+                    top_percentile_per_component=args.ica_percentile,
                 )
-            mask_handles = apply_ica_masks(model, mask_dict, mask_mode=args.mask_mode)
-            logger.info(f"Applied functional-network masking: mode={args.mask_mode}")
+                if not component_masks:
+                    logger.warning(
+                        "Global ICA produced no component masks; proceeding without masking."
+                    )
+                else:
+                    # Build & save templates (includes layout metadata for IoU later)
+                    templates = ica_mask.build_templates_from_current_components(
+                        name="groupwise_v1"
+                    )
+                    template_path = os.path.join(
+                        args.output_dir, "global_templates.json"
+                    )
+                    ica_mask.save_templates(template_path, templates)
+                    logger.info(f"Saved global ICA templates to {template_path}")
+
+                    # Materialize for immediate use
+                    ica_mask.mask_dict_components = templates["templates"]
+                    ica_mask.global_feature_layout = templates["layout"]
+
+            if getattr(ica_mask, "mask_dict_components", None):
+                # Decide which components to target
+                comp_ids = (
+                    args.ica_component_ids
+                    if args.ica_component_ids is not None
+                    else [0]
+                )
+                existing_ids = sorted(ica_mask.mask_dict_components.keys())
+                bad = [c for c in comp_ids if c not in existing_ids]
+                if bad:
+                    raise ValueError(
+                        f"Requested component ids {bad} not in available {existing_ids}"
+                    )
+
+                # Map mask_mode to global mode with backward-compat for legacy values
+                _mm = args.mask_mode
+                if _mm in ("lesion", "key"):
+                    global_mode = "lesion"
+                else:
+                    global_mode = "preserve"
+                if _mm in ("key", "complement"):
+                    logger.warning(
+                        "Deprecated mask_mode '%s'. Use 'lesion'/'preserve' instead.",
+                        _mm,
+                    )
+
+                # Log coverage summary
+                logger.info(
+                    "Global ICA Component Coverage Summary (per selected component):"
+                )
+                for cid in comp_ids:
+                    comp = (
+                        ica_mask.mask_dict_components.get(cid, {})
+                        if ica_mask.mask_dict_components
+                        else {}
+                    )
+                    layer_counts = {lid: len(chs) for lid, chs in comp.items()}
+
+                    logger.info(
+                        f"  • comp {cid}: {sum(layer_counts.values())} channels across {len(layer_counts)} layers"
+                    )
+
+                # Build union of selected channels across components for static estimates
+                from collections import defaultdict as _dd
+
+                _union_sets = _dd(set)
+                for cid in comp_ids:
+                    comp = (
+                        ica_mask.mask_dict_components.get(cid, {})
+                        if ica_mask.mask_dict_components
+                        else {}
+                    )
+                    for layer, chans in comp.items():
+                        for ch in chans:
+                            _union_sets[layer].add(ch)
+                mask_union = {k: sorted(v) for k, v in _union_sets.items()}
+                applied_mask_mode = global_mode
+
+                mask_handles = ica_mask.apply_component_masks(
+                    model=model,
+                    component_ids=comp_ids,
+                    mode=global_mode,
+                )
+                logger.info(
+                    f"Applied GLOBAL component masking: components={comp_ids} mode={global_mode}"
+                )
+            else:
+                logger.warning("No component masks available - skipping masking.")
+
         # ------------------------------------------------------
 
         # Create trainer
@@ -1514,44 +1574,124 @@ def main():
             checkpoint = args.resume_from_checkpoint
             logger.info(f"Resuming training from checkpoint: {checkpoint}")
 
-        # Start training
+        # Static estimate of masked trainable parameters (LoRA down_proj rows)
+
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info(f"Trainable parameters: {trainable_params:,}")
+
+        if applied_mask_mode in ("lesion", "preserve") and mask_union:
+            masked_params_est = ica_mask.estimate_masked_params_for_lora_down_proj(
+                model, mask_union, applied_mask_mode
+            )
+            effective_trainable = max(0, trainable_params - masked_params_est)
+            logger.info(
+                f"Effective trainable parameters (static est.): {effective_trainable:,} "
+                f"[= {trainable_params:,} - masked {masked_params_est:,}]"
+            )
+
         logger.info("Starting training...")
         trainer.train(resume_from_checkpoint=checkpoint)
 
-        # Remove hooks to save an unmasked model
         for h in mask_handles:
             h.remove()
 
-        # Save final model
         final_output_dir = os.path.join(args.output_dir, "final_model")
         save_model_and_tokenizer(model, tokenizer, final_output_dir, lora_args.use_peft)
 
-        # Convert to GGUF if requested
+        if args.merge_adapter_with_base and lora_args.use_peft:
+            logger.info("Merging LoRA adapter with base model...")
+
+            adapter_output_dir = os.path.join(args.output_dir, "adapter")
+            merged_output_dir = os.path.join(args.output_dir, "merged_model")
+
+            import shutil
+
+            if os.path.exists(adapter_output_dir):
+                shutil.rmtree(adapter_output_dir)
+            shutil.copytree(final_output_dir, adapter_output_dir)
+            logger.info(f"Adapter saved to: {adapter_output_dir}")
+
+            from .utils.model_utils import merge_adapter_with_base_model
+
+            try:
+                merge_adapter_with_base_model(
+                    adapter_path=final_output_dir,
+                    output_path=merged_output_dir,
+                    base_model_name=model_args.model_name_or_path,
+                )
+                logger.info(f"Merged model saved to: {merged_output_dir}")
+
+                if hasattr(tokenizer, "save_pretrained"):
+                    tokenizer.save_pretrained(merged_output_dir)
+                    logger.info("Tokenizer saved to merged model directory")
+
+            except Exception as e:
+                logger.error(f"Failed to merge adapter with base model: {e}")
+                logger.warning("Continuing with training completion...")
+        elif args.merge_adapter_with_base and not lora_args.use_peft:
+            logger.warning(
+                "--merge_adapter_with_base was specified but PEFT is not enabled. Skipping merge operation."
+            )
+
         if args.convert_to_gguf:
             gguf_output_path = os.path.join(args.output_dir, "model.gguf")
-            convert_to_gguf(final_output_dir, gguf_output_path, args.gguf_quantization)
+            # Prefer merged model for GGUF conversion when available
+            model_dir_for_gguf = final_output_dir
+            merged_dir_candidate = os.path.join(args.output_dir, "merged_model")
+            if os.path.exists(merged_dir_candidate):
+                logger.info("Using merged model directory for GGUF conversion")
+                model_dir_for_gguf = merged_dir_candidate
+            else:
+                logger.info(
+                    "Merged model directory not found; using final_model for GGUF conversion"
+                )
+            convert_to_gguf(
+                model_dir_for_gguf, gguf_output_path, args.gguf_quantization
+            )
 
-        # Upload to Hugging Face Hub if requested
         if args.push_to_hub:
             if not args.hub_repo_id:
                 logger.error("--hub_repo_id is required when using --push_to_hub")
                 raise ValueError("hub_repo_id must be specified for Hub upload")
 
+            upload_model_path = final_output_dir
+            upload_use_peft = lora_args.use_peft
+
+            if (
+                args.upload_merged_model
+                and args.merge_adapter_with_base
+                and lora_args.use_peft
+            ):
+                merged_output_dir = os.path.join(args.output_dir, "merged_model")
+                if os.path.exists(merged_output_dir):
+                    upload_model_path = merged_output_dir
+                    upload_use_peft = False  # Merged model is not a PEFT model
+                    logger.info(f"Uploading merged model from: {merged_output_dir}")
+                else:
+                    logger.warning(
+                        "Merged model directory not found, falling back to adapter upload"
+                    )
+            elif args.upload_merged_model and not args.merge_adapter_with_base:
+                logger.warning(
+                    "--upload_merged_model specified but --merge_adapter_with_base not enabled. Uploading adapter instead."
+                )
+            elif args.upload_merged_model and not lora_args.use_peft:
+                logger.warning(
+                    "--upload_merged_model specified but PEFT not enabled. Uploading full model instead."
+                )
+
             try:
                 upload_to_hub(
-                    model_path=final_output_dir,
+                    model_path=upload_model_path,
                     tokenizer=tokenizer,
                     repo_id=args.hub_repo_id,
                     commit_message=args.hub_commit_message,
                     private=args.hub_private,
                     token=args.hub_token,
-                    push_adapter_only=args.push_adapter_only,
-                    use_peft=lora_args.use_peft,
+                    use_peft=upload_use_peft,
                 )
             except Exception as e:
                 logger.error(f"Failed to upload to Hub: {e}")
-                # Don't raise here to allow training to complete successfully
-                # even if upload fails
 
         # Log final metrics
         if trainer.state.log_history:

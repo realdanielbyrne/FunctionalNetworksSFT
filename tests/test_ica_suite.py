@@ -44,9 +44,9 @@ def run_ica_tests():
             TestMaskHookBehavior,
         )
 
-        logger.info("✓ Successfully imported all test modules")
+        logger.info("OK Successfully imported all test modules")
     except ImportError as e:
-        logger.error(f"✗ Failed to import test modules: {e}")
+        logger.error(f"X Failed to import test modules: {e}")
         return False
 
     # Create test suite
@@ -105,11 +105,9 @@ def run_ica_tests():
     success = failures == 0 and errors == 0
 
     if success:
-        logger.info(
-            "\n🎉 All ICA tests passed! The functionality is working correctly."
-        )
+        logger.info("\nAll ICA tests passed! The functionality is working correctly.")
     else:
-        logger.error("\n❌ Some ICA tests failed. Please check the implementation.")
+        logger.error("\nSome ICA tests failed. Please check the implementation.")
 
     return success
 
@@ -132,9 +130,9 @@ def test_dependencies():
     for module_name, display_name in dependencies:
         try:
             __import__(module_name)
-            logger.info(f"✓ {display_name}")
+            logger.info(f"OK {display_name}")
         except ImportError:
-            logger.error(f"✗ {display_name}")
+            logger.error(f"X {display_name}")
             missing_deps.append(display_name)
 
     if missing_deps:
@@ -146,9 +144,9 @@ def test_dependencies():
     try:
         from sklearn.decomposition import FastICA
 
-        logger.info("✓ FastICA from scikit-learn")
+        logger.info("OK FastICA from scikit-learn")
     except ImportError:
-        logger.error("✗ FastICA not available in scikit-learn")
+        logger.error("X FastICA not available in scikit-learn")
         return False
 
     return True
@@ -165,7 +163,7 @@ def test_basic_functionality():
             compute_ica_masks_for_model,
         )
 
-        logger.info("✓ ICA functions imported successfully")
+        logger.info("OK ICA functions imported successfully")
 
         # Test basic mask creation
         import torch
@@ -195,7 +193,7 @@ def test_basic_functionality():
 
         # Test mask application (should not crash)
         handles = apply_ica_masks(model, mask_dict, mask_mode="key")
-        logger.info("✓ Basic mask application works")
+        logger.info("OK Basic mask application works")
 
         # Clean up
         for handle in handles:
@@ -204,7 +202,7 @@ def test_basic_functionality():
         return True
 
     except Exception as e:
-        logger.error(f"✗ Basic functionality test failed: {e}")
+        logger.error(f"X Basic functionality test failed: {e}")
         return False
 
 

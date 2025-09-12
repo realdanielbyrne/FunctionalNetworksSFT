@@ -13,16 +13,6 @@ which pointed to a dimensionality reduction solution.
 Implemented PCA preprocessing to reduce the dimensionality before applying ICA, which maintains the essential information while
 making the computation feasible.
 
-Changes Made
-Added PCA import to ica_mask.py
-Added max_pca_components parameter to the ICAMask class constructor (default: 1000)
-Implemented automatic dimensionality reduction that:
-Detects when matrices exceed LAPACK limits (2³¹-1 elements)
-Applies PCA preprocessing to reduce dimensions to a manageable size
-Transforms ICA results back to original space
-Logs the process for transparency
-Updated command-line interface to accept --max_pca_components parameter
-Updated function signatures throughout the codebase
 
 Author: Daniel Byrne
 License: MIT
@@ -210,11 +200,7 @@ class ICAMask:
         n_components: Optional[int] = None,
         top_percentile_per_component: Optional[float] = None,
     ) -> Dict[int, Dict[str, List[int]]]:
-        """
-        NEW MODE:
-        Run ONE ICA over a global feature space formed by concatenating ALL layers' final MLP outputs.
-        Returns: component_masks[comp_id][layer_str] = [hidden_channel indices]
-        """
+
         logger.info(
             "Global ICA: capturing final MLP outputs from all layers (post-activation, post down-proj)."
         )
@@ -342,15 +328,10 @@ class ICAMask:
         ):
             logger.info(
                 f"Matrix too large for direct ICA ({Xz.shape}, {matrix_elements} elements). "
-                f"Applying PCA preprocessing to reduce dimensionality."
             )
 
-            # Apply PCA to reduce dimensionality
             n_pca_components = min(
                 self.max_pca_components, Xz.shape[1], Xz.shape[0] - 1
-            )
-            logger.info(
-                f"Reducing dimensionality with PCA: {Xz.shape[1]} -> {n_pca_components}"
             )
 
             pca = PCA(n_components=n_pca_components, random_state=0)
@@ -417,11 +398,6 @@ class ICAMask:
         component_ids: List[int],
         mode: Literal["lesion", "preserve"] = "lesion",
     ) -> List[Any]:
-        """
-        NEW MODE APPLY:
-        Multiply MLP outputs by a per-channel mask. 'lesion' zeros selected channels;
-        'preserve' zeros everything else. Operates at the MLP output (post-activation).
-        """
         if not self.mask_dict_components:
             raise ValueError(
                 "No component masks available. Run compute_global_networks first."
@@ -508,7 +484,6 @@ class ICAMask:
                 "No global components/layout available. Run compute_global_networks() first."
             )
 
-        # Type assertions after None check
         assert self.mask_dict_components is not None
         assert self.global_feature_layout is not None
 
@@ -552,7 +527,7 @@ class ICAMask:
         """
         with open(path, "r") as f:
             templates = json.load(f)
-        # normalize keys
+
         templates["templates"] = {
             int(k): {str(ly): list(map(int, v2)) for ly, v2 in v.items()}
             for k, v in templates["templates"].items()

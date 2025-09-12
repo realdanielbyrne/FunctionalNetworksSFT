@@ -419,118 +419,89 @@ def load_quantization_config_from_args(
     )
 
 
+def _parse_dtype(dtype_str: str) -> torch.dtype:
+    if dtype_str == "auto":
+        return get_recommended_dtype()
+    return {
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+        "float32": torch.float32,
+    }.get(dtype_str, torch.float16)
+
+
 def load_model_and_tokenizer(
     model_args: ModelArguments, quant_config: Optional[BitsAndBytesConfig]
 ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
-    """Load model and tokenizer with cross-platform support."""
     logger.info(f"Loading model: {model_args.model_name_or_path}")
 
-    # Get optimal device and dtype for current platform
     device, device_name = get_optimal_device()
     logger.info(f"Target device: {device_name}")
 
-    # Determine torch dtype - use platform-aware recommendation if not specified
+    torch_dtype = _parse_dtype(model_args.torch_dtype)
     if model_args.torch_dtype == "auto":
-        torch_dtype = get_recommended_dtype()
         logger.info(f"Auto-selected dtype: {torch_dtype}")
-    else:
-        # Parse the specified dtype string
-        if model_args.torch_dtype == "float16":
-            torch_dtype = torch.float16
-        elif model_args.torch_dtype == "bfloat16":
-            torch_dtype = torch.bfloat16
-        elif model_args.torch_dtype == "float32":
-            torch_dtype = torch.float32
-        else:
-            logger.warning(
-                f"Unknown torch_dtype '{model_args.torch_dtype}', defaulting to float16"
-            )
-            torch_dtype = torch.float16
-        logger.info(f"Using specified dtype: {torch_dtype}")
 
-    # Get authentication token
-    auth_token = None
+    # Auth token resolution
+    auth_token: Optional[Union[str, bool]] = None
     if model_args.use_auth_token:
-        # First try environment variable
         auth_token = os.getenv("HF_TOKEN")
         if auth_token:
             logger.info("Using HF_TOKEN from environment")
         else:
-            # Try to use cached credentials from huggingface-cli login
             try:
                 if whoami is not None:
-                    user_info = whoami()  # This will use cached token if available
-                    logger.info(
-                        f"Using cached HuggingFace credentials for user: {user_info['name']}"
-                    )
-                    auth_token = (
-                        True  # Set to True to indicate we should use cached credentials
-                    )
-                else:
-                    raise ImportError("whoami not available")
-            except Exception as e:
-                logger.warning(
-                    f"No HF_TOKEN environment variable and no cached credentials found: {e}"
-                )
-                auth_token = None
+                    _ = whoami()  # uses cached creds if available
+                    auth_token = True
+                    logger.info("Using cached HuggingFace credentials")
+            except Exception:
+                logger.warning("No HF token found; proceeding without auth")
 
-    # Load tokenizer
+    # Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
         token=auth_token,
     )
-    # Set pad token if not exists
-    if getattr(tokenizer, "pad_token", None) is None:
-        eos_token = getattr(tokenizer, "eos_token", None)
-        if eos_token is not None:
-            tokenizer.pad_token = eos_token
-            tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
+    if getattr(tokenizer, "pad_token", None) is None and getattr(
+        tokenizer, "eos_token", None
+    ):
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = getattr(tokenizer, "eos_token_id", None)
 
-    # Load model with cross-platform device mapping
-    # Handle CUDA compatibility issues with newer GPUs
+    # Device map probe
     device_map = None
-    if device.type in ["cuda", "mps"]:
+    if device.type in {"cuda", "mps"}:
         try:
-            # Test if GPU operations work with this device
-            test_tensor = torch.randn(10, 10).to(device)
-            _ = torch.matmul(test_tensor, test_tensor)
+            test = torch.randn(10, 10).to(device)
+            _ = test @ test
             device_map = "auto"
-            logger.info("GPU operations verified - using automatic device mapping")
+            logger.info("GPU ops verified - using automatic device mapping")
         except RuntimeError as e:
-            logger.warning(
-                f"GPU test failed: {e} - falling back to manual device placement"
-            )
+            logger.warning(f"GPU probe failed: {e} - falling back to manual placement")
 
-    # Prepare model loading kwargs
-    model_kwargs = {
+    model_kwargs: Dict[str, Any] = {
         "quantization_config": quant_config,
         "torch_dtype": torch_dtype,
         "trust_remote_code": model_args.trust_remote_code,
         "token": auth_token,
         "device_map": device_map,
     }
-
-    # Add attention implementation if specified and not "auto"
     if model_args.attn_implementation != "auto":
         model_kwargs["attn_implementation"] = model_args.attn_implementation
-        logger.info(f"Using attention implementation: {model_args.attn_implementation}")
+        logger.info(f"Attention implementation: {model_args.attn_implementation}")
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path,
-        **model_kwargs,
+        model_args.model_name_or_path, **model_kwargs
     )
 
-    # Move to device if device_map wasn't used
     if device_map is None:
         try:
             model = model.to(device)
             logger.info(f"Model moved to {device}")
         except RuntimeError as e:
             if device.type == "cuda":
-                logger.warning(f"!!!! Failed to move model to CUDA: {e}")
-                device = torch.device("cpu")
-                model = model.to(device)
+                logger.warning(f"Failed to move model to CUDA: {e} -> CPU fallback")
+                model = model.to(torch.device("cpu"))
             else:
                 raise
 
@@ -664,9 +635,6 @@ def create_trainer(
     training_args: TrainingArguments,
     data_collator,
 ) -> Trainer:
-    """Create and configure the trainer."""
-
-    # Add early stopping callback
     callbacks = [EarlyStoppingCallback(early_stopping_patience=3)]
 
     trainer = Trainer(
@@ -683,10 +651,8 @@ def create_trainer(
 
 
 def load_config_from_yaml(config_path: str) -> Dict[str, Any]:
-    """Load configuration from YAML file."""
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    return config
+        return yaml.safe_load(f)
 
 
 def main(log_file=None):

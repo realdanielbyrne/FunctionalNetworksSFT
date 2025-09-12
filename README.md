@@ -575,6 +575,34 @@ The package provides optimized installations for different hardware configuratio
 - **[Training Guide](docs/training.md)** - Comprehensive training documentation (coming soon)
 - **[API Reference](docs/api.md)** - API documentation (coming soon)
 
+## Prior Research
+
+This project is inspired by the following research:
+
+- Title: Brain-Inspired Exploration of Functional Networks and Key Neurons in Large Language Models
+  Authors: Yiheng Liu, Xiaohui Gao, Haiyang Sun, Bao Ge, Tianming Liu, Junwei Han, Xintao Hu
+  Link: <https://arxiv.org/html/2502.20408v1>
+
+### Summary of the paper
+
+The authors investigate whether large language models (LLMs) exhibit brain-like functional networks. Drawing on cognitive neuroscience, they apply Independent Component Analysis (ICA) to neuron activations (specifically MLP outputs) to decompose them into functional networks. They evaluate importance via two interventions: masking (lesion) and preservation. Key findings include that masking a small set of “key” networks (often comprising less than ~2% of neurons) can severely degrade performance, while preserving a compact subset of networks (on the order of ~10% of MLP neurons) can retain near-baseline capability. They also study group-wise ICA templates and similarity across inputs/models, supporting the view that LLMs contain recurring functional patterns.
+
+### Concepts that informed this software
+
+- Functional brain networks analogue: Treating LLM neuron activations like fMRI signals and recovering recurring functional networks via ICA.
+- ICA over MLP activations: Running ICA on the final MLP outputs to obtain component-wise channel maps per layer.
+- Group-wise templates and similarity: Building global (group) templates from multiple samples and relating per-sample networks via similarity metrics.
+- Causal probes via interventions: Neuron/network lesion and preservation experiments to assess contribution to model behavior and efficiency.
+
+### Relation to this codebase
+
+- ICA-based discovery: This repo implements FastICA-based network extraction from MLP activations, including a global, group-wise mode. See `src/functionalnetworkssft/ica_mask.py` (`compute_global_networks`) and the CLI for template building in `src/functionalnetworkssft/build_ica_templates.py`.
+- Network masking during SFT: We apply binary masks as forward hooks at MLP outputs to support both lesion and preserve modes. See `ICAMask.apply_component_masks` in `ica_mask.py` and the `--mask_mode` options in the training CLI.
+- Template-driven workflows: Precomputed templates can be saved/loaded (`--ica_template_path`), selecting components (`--ica_component_ids`) and controlling sparsity via percentile thresholds (`--ica_percentile`).
+- Experimental comparisons: The `experiments/peft_vs_peft-ica` directory includes runs contrasting standard PEFT with PEFT+ICA masking in lesion/preserve settings.
+
+This repository is an independent, engineering-focused reimplementation that operationalizes the paper’s core ideas for supervised fine-tuning workflows (HF Transformers + LoRA/QLoRA), enabling reproducible ICA template building, component selection, and functional-network-aware training.
+
 ## Research
 
 ### ICA-Based Functional Network Masking for LLM Fine-Tuning

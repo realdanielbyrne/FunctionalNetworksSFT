@@ -1057,6 +1057,30 @@ def main(log_file=None):
         help="Path to global ICA templates JSON (build with build_templates_from_current_components).",
     )
 
+    # --- Anti-drift controls ---
+    parser.add_argument(
+        "--anti_drift_row_param",
+        action="store_true",
+        default=True,
+        help="Enable row-wise anti-drift parametrization (frozen + mask*delta). "
+        "If disabled, optimizer-induced drift on masked rows is not compensated.",
+    )
+    parser.add_argument(
+        "--anti_drift_apply_to",
+        type=str,
+        default="auto",
+        choices=["auto", "lora", "base", "both"],
+        help="Where to apply row parametrization. 'auto' -> 'lora' when PEFT is enabled, "
+        "'base' otherwise. 'both' forces both (use only when full-FT + LoRA).",
+    )
+    parser.add_argument(
+        "--anti_drift_unwrap_on_save",
+        action="store_true",
+        default=True,
+        help="If True, bake parametrizations into weights before saving/merging "
+        "(remove_parametrizations(..., leave_parametrized=True)).",
+    )
+
     args = parser.parse_args()
     print(args.hub_token)
 
@@ -1148,6 +1172,15 @@ def main(log_file=None):
         lora_target_modules=args.lora_target_modules,
         lora_bias=args.lora_bias,
     )
+
+    is_peft = lora_args.use_peft
+    is_quant = quant_args.use_4bit or quant_args.use_8bit
+    is_qlora = is_peft and is_quant  # training via LoRA on quantized base
+
+    # Resolve target per user flag
+    apply_to = args.anti_drift_apply_to
+    if apply_to == "auto":
+        apply_to = "lora" if is_peft else "base"
 
     # Initialize Weights & Biases if requested
     if args.use_wandb:
@@ -1550,9 +1583,22 @@ def main(log_file=None):
                     component_ids=comp_ids,
                     mode=global_mode,
                 )
-                logger.info(
-                    f"Applied GLOBAL component masking: components={comp_ids} mode={global_mode}"
-                )
+
+                param_handles = []
+                if args.mask_mode is not None and args.anti_drift_row_param:
+                    # comp_ids already resolved; global_mode is 'lesion' or 'preserve'
+                    ph = ica_mask.apply_row_parametrizations(
+                        model=model,
+                        component_ids=comp_ids,
+                        mode=global_mode,  # 'lesion' or 'preserve'
+                        target_layers=target_layers,  # may be None -> all
+                        apply_to=apply_to,  # 'lora' | 'base' | 'both'
+                        logger=logger,
+                    )
+                    param_handles.extend(ph)
+
+                logger.info(f"Applied GLOBAL component masking: components={comp_ids}.")
+
             else:
                 logger.warning("No component masks available - skipping masking.")
 
@@ -1567,6 +1613,9 @@ def main(log_file=None):
             training_args=training_args,
             data_collator=data_collator,
         )
+
+        if args.anti_drift_row_param:
+            trainer.add_callback(NoDriftCheckCallback(model, ica_mask))
 
         # Resume from checkpoint if specified
         checkpoint = None
@@ -1594,6 +1643,15 @@ def main(log_file=None):
 
         for h in mask_handles:
             h.remove()
+
+        for h in param_handles:
+            h.remove()
+
+        # Optionally bake parametrizations into actual tensors for a clean save/merge
+        if args.anti_drift_unwrap_on_save and hasattr(
+            ica_mask, "remove_row_parametrizations"
+        ):
+            ica_mask.remove_row_parametrizations(bake=True, logger=logger)
 
         final_output_dir = os.path.join(args.output_dir, "final_model")
         save_model_and_tokenizer(model, tokenizer, final_output_dir, lora_args.use_peft)
@@ -1707,6 +1765,57 @@ def main(log_file=None):
         if args.use_wandb:
             wandb.finish()
         raise
+
+
+from transformers.trainer_callback import TrainerCallback
+
+
+class NoDriftCheckCallback(TrainerCallback):
+    ##
+    # A tiny callback that asserts the masked rows didn’t change on the first optimizer step.
+    ##
+    def __init__(self, model, ica_mask, sample_limit=1):
+        self.model = model
+        self.ica_mask = ica_mask
+        self.snap = {}
+        self.done = False
+        self.sample_limit = sample_limit
+
+    def on_step_begin(self, args, state, control, **kwargs):
+        if self.done or not hasattr(self.ica_mask, "mask_dict_components"):
+            return
+        # Snapshot masked rows once
+        count = 0
+        if hasattr(self.ica_mask, "_row_parametrizations"):
+            for mod, tname in self.ica_mask._row_parametrizations:
+                if count >= self.sample_limit:
+                    break
+                with torch.no_grad():
+                    self.snap[(id(mod), tname)] = getattr(mod, tname).detach().clone()
+                count += 1
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.done or not self.snap:
+            return
+        # Compare post-step
+        for (mid, tname), prev in self.snap.items():
+            mod = None
+            # Find module by id (inefficient but tiny set)
+            for m, tn in self.ica_mask._row_parametrizations:
+                if id(m) == mid and tn == tname:
+                    mod = m
+                    break
+            if mod is None:
+                continue
+            now = getattr(mod, tname).detach()
+            # Because we parametrized all rows, checking exact equality is fine here
+            if not torch.allclose(now, prev):
+                print(
+                    "[WARN] Anti-drift check detected a change in a parametrized tensor. "
+                    "Ensure parametrization was applied to all intended rows."
+                )
+                break
+        self.done = True
 
 
 if __name__ == "__main__":

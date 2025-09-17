@@ -32,8 +32,50 @@ from torch.utils.data import Dataset
 from sklearn.decomposition import FastICA, PCA
 from transformers.modeling_utils import PreTrainedModel
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from torch.nn.utils.parametrize import register_parametrization, remove_parametrizations
+
 
 logger = logging.getLogger(__name__)
+
+
+class RowMaskedDelta(torch.nn.Module):
+    """
+    W_eff = frozen + row_mask * delta
+    row_mask: [out_features, 1] with {0,1} entries; broadcast across columns.
+    """
+
+    def __init__(self, row_mask: torch.Tensor, frozen_weight: torch.Tensor):
+        super().__init__()
+        # Keep buffers on correct device/dtype
+        self.register_buffer("row_mask", row_mask)
+        self.register_buffer("frozen", frozen_weight.clone())
+
+    def forward(self, delta: torch.Tensor) -> torch.Tensor:
+        return self.frozen + self.row_mask * delta
+
+
+def _build_row_mask(
+    out_features: int, train_rows: list[int], device, dtype
+) -> torch.Tensor:
+    mask = torch.zeros(out_features, 1, device=device, dtype=dtype)
+    if len(train_rows) > 0:
+        mask[torch.as_tensor(train_rows, device=device)] = 1.0
+    return mask
+
+
+def _union_selected_rows(
+    mask_dict_components: dict, comp_ids: list[int]
+) -> dict[str, list[int]]:
+    """Union channel indices across components -> {layer_id_str: [rows...]}."""
+    from collections import defaultdict
+
+    agg = defaultdict(set)
+    for cid in comp_ids:
+        comp = mask_dict_components.get(cid, {})
+        for layer, rows in comp.items():
+            for r in rows:
+                agg[layer].add(r)
+    return {k: sorted(v) for k, v in agg.items()}
 
 
 class ICAMask:
@@ -730,3 +772,167 @@ class ICAMask:
             return int(total)
         except Exception:
             return 0
+
+    def apply_row_parametrizations(
+        self,
+        model: torch.nn.Module,
+        component_ids: list[int],
+        mode: str,  # 'lesion' or 'preserve'
+        target_layers: Optional[list[int]] = None,
+        apply_to: str = "auto",  # 'lora'|'base'|'both'|'auto' (resolved earlier)
+        logger: Optional[Any] = None,
+    ) -> list[tuple[torch.nn.Module, str]]:
+        """
+        Row-wise anti-drift parametrization:
+          - For LoRA: parametrize lora_B.weight (and optionally bias) with RowMaskedDelta.
+          - For base full-FT: parametrize down_proj.weight (and bias if present).
+        Returns a list of (module, tensor_name) we parametrized so we can remove later.
+        """
+
+        # 1) Figure out MLPs & down_proj per layer (reuse your existing helper)
+        if hasattr(self, "_find_decoder_blocks_and_mlps"):
+            _, mlps = self._find_decoder_blocks_and_mlps(
+                getattr(model, "base_model", model)
+            )
+        else:
+            raise RuntimeError("ICAMask missing _find_decoder_blocks_and_mlps")
+
+        # 2) Convert layer selection to strings like your templates use
+        #    If target_layers None -> use all MLP indices.
+        layer_ids = (
+            [str(i) for i in range(len(mlps))]
+            if target_layers is None
+            else [str(i) for i in target_layers]
+        )
+
+        # 3) Union selected rows across components
+        if not hasattr(self, "mask_dict_components") or not self.mask_dict_components:
+            if logger:
+                logger.warning("No component masks found; skipping parametrizations.")
+            return []
+
+        union = _union_selected_rows(self.mask_dict_components, component_ids)
+
+        # 4) Helper to compute train_rows given mode and union
+        def compute_train_rows(layer_idx: int, out_dim: int) -> list[int]:
+            sel = set(union.get(str(layer_idx), []))
+            if mode == "preserve":
+                return sorted(sel)  # train only selected; freeze others
+            elif mode == "lesion":
+                # train complement; freeze selected
+                return sorted(set(range(out_dim)) - sel)
+            else:
+                raise ValueError(f"Unknown mode: {mode}")
+
+        # 5) Iterate layers and install parametrizations
+        self._row_parametrizations: list[tuple[torch.nn.Module, str]] = []
+        total_layers, total_rows_frozen = 0, 0
+
+        for li, mlp in enumerate(mlps):
+            if mlp is None or (str(li) not in layer_ids):
+                continue
+            dp = getattr(mlp, "down_proj", None)
+            if dp is None:
+                continue
+
+            # Determine out_features from the true effective output dim
+            # Prefer dp.out_features; else infer from weight/lora_B
+            out_features = getattr(dp, "out_features", None)
+            if out_features is None:
+                W = getattr(dp, "weight", None)
+                if W is not None and W.ndim == 2:
+                    out_features = W.shape[0]
+            if out_features is None:
+                # Try LoRA B as a fallback
+                lora_B = getattr(dp, "lora_B", None)
+                if lora_B:
+                    any_B = next(iter(lora_B.values()))
+                    out_features = any_B.weight.shape[0]
+            if out_features is None:
+                continue  # cannot resolve
+
+            train_rows = compute_train_rows(li, out_features)
+            row_mask = _build_row_mask(
+                out_features, train_rows, device=dp.weight.device, dtype=dp.weight.dtype
+            )
+            frozen_rows = out_features - len(train_rows)
+            total_layers += 1
+            total_rows_frozen += frozen_rows
+
+            # --- Apply to LoRA B if requested/available ---
+            if apply_to in ("lora", "both"):
+                lora_B = getattr(dp, "lora_B", None)
+                if lora_B:
+                    for name, lB in lora_B.items():  # lB.weight: [out_features, r]
+                        register_parametrization(
+                            lB,
+                            "weight",
+                            RowMaskedDelta(
+                                row_mask=row_mask, frozen_weight=lB.weight.data
+                            ),
+                        )
+                        # initialize underlying delta to zeros
+                        with torch.no_grad():
+                            lB.parametrizations.weight[0].original.zero_()
+                        self._row_parametrizations.append((lB, "weight"))
+
+                # Optional bias on LoRA is uncommon; skip unless it exists:
+                # if hasattr(dp, "lora_bias"): ...
+
+            # --- Apply to base down_proj if requested and trainable (non-QLoRA full FT) ---
+            if apply_to in ("base", "both"):
+                W = getattr(dp, "weight", None)
+                if W is not None and W.requires_grad and W.ndim == 2:
+                    register_parametrization(
+                        dp,
+                        "weight",
+                        RowMaskedDelta(row_mask=row_mask, frozen_weight=W.data),
+                    )
+                    with torch.no_grad():
+                        dp.parametrizations.weight[0].original.zero_()
+                    self._row_parametrizations.append((dp, "weight"))
+
+                b = getattr(dp, "bias", None)
+                if b is not None and b.requires_grad:
+                    # Bias uses [out_features] row mask -> squeeze(-1)
+                    register_parametrization(
+                        dp,
+                        "bias",
+                        RowMaskedDelta(
+                            row_mask=row_mask.squeeze(-1), frozen_weight=b.data
+                        ),
+                    )
+                    with torch.no_grad():
+                        dp.parametrizations.bias[0].original.zero_()
+                    self._row_parametrizations.append((dp, "bias"))
+
+        if logger:
+            logger.info(
+                f"[Anti-Drift] Parametrized {len(self._row_parametrizations)} tensors "
+                f"across {total_layers} layers; total frozen rows: {total_rows_frozen}"
+            )
+        return list(self._row_parametrizations)
+
+    def remove_row_parametrizations(
+        self, bake: bool = True, logger: Optional[Any] = None
+    ):
+        """
+        Undo/bake parametrizations. If bake=True, set param to current output
+        (frozen + mask*delta) and drop parametrization metadata.
+        """
+        if not hasattr(self, "_row_parametrizations"):
+            return
+        # Deduplicate (module, tensor_name)
+        seen = set()
+        for mod, tname in list(self._row_parametrizations)[::-1]:
+            key = (id(mod), tname)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                remove_parametrizations(mod, tname, leave_parametrized=bake)
+            except Exception:
+                pass
+        if logger:
+            logger.info(f"[Anti-Drift] Removed row parametrizations (bake={bake}).")
+        self._row_parametrizations = []

@@ -17,15 +17,18 @@ model_name_or_path: "meta-llama/Llama-3.2-3B-Instruct"
 
 
 # Output configuration
-output_dir: "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/components_0_1/test_ft"
+output_dir: "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output/components_0_1/first_ft"
 torch_dtype: "auto"  # Use platform-optimized dtype
+use_8bit: false
+use_4bit: false
+anti_drift_apply_to: "both"
 
 # Dataset configuration
+#dataset_name_or_path: "databricks/databricks-dolly-15k"
 dataset_name_or_path: "camel-ai/physics"
 #dataset_name_or_path: "YaTharThShaRma999/Physics_dataset"
 #dataset_name_or_path: "0xZee/dataset-CoT-Atomic-Nuclear-Physics-144"
 #dataset_name_or_path: "datasets/sarcasm.csv"
-
 validation_split: 0.1  # 10% for validation
 
 # Dataset preprocessing parameters
@@ -42,7 +45,7 @@ lora_target_modules: null  # Auto-detect target modules
 
 # Training Configuration
 #max_steps: 5 # Uncomment to override num_train_epochs
-num_train_epochs: 4     # Exactly 2 epochs as specified
+num_train_epochs: 2
 max_steps: 1
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 1
@@ -71,11 +74,11 @@ gradient_checkpointing: false
 
 # Monitoring
 use_wandb: true
-wandb_project: "Fnsft_PEFT+ICA_Preserve"
+wandb_project: "Fnsft_PEFT+ICA_Preserve-Physics"
 
 # Hub upload (merged model)
 push_to_hub: false
-hub_repo_id: "realdanielbyrne/Llama-3.2-1B-Instruct"
+hub_repo_id: "realdanielbyrne/Llama-3.2-3B-Instruct_Physics-PEFT+ICA_Preserve"
 hub_commit_message: "Llama-3.2-1B-Instruct_PEFT+ICA_Preserve"
 hub_private: false
 merge_adapter_with_base: true  # Merge adapter with base model

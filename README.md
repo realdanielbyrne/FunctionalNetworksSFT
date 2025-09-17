@@ -1,32 +1,20 @@
-# Functional Networks SFT
+# Functional Network-Based Selective Fine-Tuning of Large Language Models
 
-**FunctionalNetworksSFT** is a research-oriented framework for fine-tuning large language models using ICA-based functional network masking. This innovative approach leverages neuroscience insights about functional brain networks to selectively train or ablate specific neuron groups during supervised fine-tuning (SFT).
+## Abstract
 
-## Core Innovation
+Large Language Models (LLMs) have demonstrated remarkable capabilities, but fine-tuning them on new tasks can lead to catastrophic forgetting – the erosion of previously learned knowledge when adapting to new data ￼. Recent research in model interpretability suggests that groups of neurons in LLMs form functional networks analogous to functional brain networks in cognitive neuroscience ￼. In this work, we propose a brain-inspired selective fine-tuning methodology that targets these functional sub-networks during Supervised Fine-Tuning (SFT). By identifying independent components of neuron activations via Principal Component Analysis (PCA) and Independent Component Analysis (ICA), we isolate coherent functional networks within the model. We then selectively train (or conversely, freeze) these ICA-defined networks while keeping other parameters fixed. This approach is aimed at preserving the model’s pre-trained knowledge by minimizing disruptive weight updates, thereby potentially mitigating catastrophic forgetting while still integrating new information. We describe the theoretical motivation, methodology, and implementation of this framework. Results are pending as we continue to conduct experiments; however, this work lays the foundation for a novel fine-tuning paradigm that bridges insights from neuroscience and large-scale language model training.
 
-The framework implements **functional network masking** - a technique that applies binary masks to specific neurons during training based on Independent Component Analysis (ICA) of neuron activations. This allows researchers to:
+## Introduction
 
-- **Ablate key networks**: Mask important functional networks to study their role in model performance
-- **Isolate networks**: Train only specific functional networks while masking all others
-- **Targeted fine-tuning**: Update weights only in functionally relevant neurons, potentially reducing negative effects of full parameter fine-tuning
+The success of LLMs in NLP has led to widespread use of supervised fine-tuning (SFT) to adapt pre-trained models to specific tasks or instruction datasets. SFT involves updating model weights on new supervised data, which often improves performance on the fine-tuned task. However, a well-known challenge in this process is catastrophic forgetting, where the model’s performance on original or unrelated tasks deteriorates after fine-tuning ￼. Catastrophic forgetting occurs because adjusting all of a model’s parameters to fit new data can overwrite the knowledge gained during pre-training ￼ ￼. As model size increases, this forgetting effect may become even more severe ￼, undermining the model’s general-purpose capabilities.
 
-## Key Capabilities
+Concurrently, understanding the internal mechanisms of LLMs has become an important research goal. Traditional interpretability studies often focus on identifying single “important” neurons or attention heads that correlate with specific behaviors or features. Yet, as Liu et al. (2025a) argue, such approaches neglect the fact that higher cognitive functions (in brains or in complex neural networks) arise from interactions among networks of neurons rather than single units ￼. In neuroscience, the concept of functional brain networks – distributed groups of neurons or regions with highly correlated activity – is well-established ￼. Brain-inspired analysis of LLMs suggests that analogous functional networks of artificial neurons may exist in these models ￼. Indeed, recent work identified recurring functional networks within GPT-style models using techniques akin to fMRI analysis ￼. These studies found that certain networks of neurons consistently co-activate and are crucial for the model’s performance: masking (lesioning) these key networks causes significant drops in performance, while preserving only these networks can still sustain much of the model’s functionality ￼. This insight implies that knowledge in LLMs might be compartmentalized into functional substructures.
 
-- **ICA-Based Network Discovery**: Automatically identifies functional networks using FastICA analysis of MLP activations
-- **Flexible Masking Modes**: Support for both ablation (`key`) and isolation (`complement`) masking strategies
-- **Pre-computed or On-the-fly ICA**: Use existing ICA masks from JSON files or compute them dynamically during training
-- **Hugging Face Integration**: Seamless compatibility with transformers, LoRA/QLoRA, and quantization techniques
-- **Cross-Platform Optimization**: Native support for CUDA, Apple Silicon (MPS), and CPU-only environments
+Given this background, we hypothesize that selectively fine-tuning an LLM’s functional networks could improve training efficiency and reduce interference with existing skills. Rather than updating all weights indiscriminately, our approach restricts weight updates to a targeted subset of neurons – an ICA-derived functional network – or, alternatively, ablates certain networks during training (freezing them) to preserve their original function. By doing so, we aim to mitigate catastrophic forgetting: the untouched parts of the network maintain prior capabilities, while the model learns new information in a constrained subspace. This idea is a natural extension of the lesion/preservation experiments by Liu et al. (2025a) ￼, now applied during training. It also resonates with strategies in continual learning and parameter-efficient fine-tuning, where only a portion of the model’s weights are trained to prevent overwriting existing knowledge. For example, Low-Rank Adaptation (LoRA) trains only a small additional weight matrix and leaves the original weights mostly unchanged, thereby preserving the model’s pre-trained knowledge while learning new tasks ￼. Our method differs in that the subset of weights to update is determined by the model’s intrinsic functional organization (via ICA), rather than by architectural add-ons or generic criteria.
 
-## Features
+In summary, this work proposes a novel SFT algorithm that bridges research in functional networks with fine-tuning of LLMs. We present the motivation and methodology for identifying functional networks in transformer models and describe how selective training is performed. The ultimate goal is to enable LLMs to learn new tasks effectively with minimal loss of prior knowledge, improving continual learning for these models.
 
-- 🚀 **Cross-Platform Support**: Works on CUDA-enabled systems and Apple Silicon Macs
-- ⚡ **Hardware Acceleration**: Automatic detection and optimization for CUDA and MPS backends
-- 🔧 **Quantization Support**: BitsAndBytes 4-bit/8-bit quantization on CUDA systems
-- 🎯 **LoRA/QLoRA**: Parameter-efficient fine-tuning with automatic target module detection
-- 📊 **Experiment Tracking**: Built-in Weights & Biases integration
-- 🔄 **Flexible Data Formats**: Automatic detection and conversion of various dataset formats
-- 🛡️ **Robust Error Handling**: Graceful fallbacks for platform-specific features
+Key contributions of this project include: (1) introducing an ICA-based technique to decompose an LLM into functional sub-networks of neurons, (2) developing a selective fine-tuning approach that updates only chosen networks (or freezes them) during training to test their role in learning and forgetting, and (3) outlining an evaluation strategy to quantify new knowledge acquisition versus retention of original capabilities. An open-source implementation is provided to facilitate reproduction and further exploration of this approach.
 
 ## Quick Start
 

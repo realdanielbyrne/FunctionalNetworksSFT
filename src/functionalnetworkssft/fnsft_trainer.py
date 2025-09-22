@@ -163,7 +163,9 @@ class LoRAArguments:
     lora_r: int = field(default=16)
     lora_alpha: int = field(default=32)
     lora_dropout: float = field(default=0.1)
-    lora_target_modules: Optional[List[str]] = field(default=None)
+    lora_target_modules: Optional[List[str]] = field(
+        default_factory=lambda: ["down_proj", "dense_4h_to_h"]
+    )
     lora_bias: Literal["none", "all", "lora_only"] = field(default="none")
 
 
@@ -552,6 +554,7 @@ def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
         logger.info("Adapter Configuration:")
         if hasattr(model, "peft_config") and model.peft_config:
             logger.info("   - PEFT adapters configured and active")
+            logger.info("   - Detailed LoRA configuration logged during model setup")
         else:
             logger.info("   - No PEFT configuration detected")
     else:
@@ -635,7 +638,6 @@ def create_trainer(
     training_args: TrainingArguments,
     data_collator,
 ) -> Trainer:
-    callbacks = [EarlyStoppingCallback(early_stopping_patience=3)]
 
     trainer = Trainer(
         model=model,
@@ -644,7 +646,7 @@ def create_trainer(
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
         data_collator=data_collator,
-        callbacks=callbacks,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
     )
 
     return trainer
@@ -1177,6 +1179,17 @@ def main(log_file=None):
     is_quant = quant_args.use_4bit or quant_args.use_8bit
     is_qlora = is_peft and is_quant  # training via LoRA on quantized base
 
+    # Log LoRA configuration arguments
+    if is_peft:
+        logger.info("LoRA Configuration Arguments:")
+        logger.info(f"  - Use PEFT: {lora_args.use_peft}")
+        logger.info(f"  - LoRA Rank: {lora_args.lora_r}")
+        logger.info(f"  - LoRA Alpha: {lora_args.lora_alpha}")
+        logger.info(f"  - LoRA Dropout: {lora_args.lora_dropout}")
+        logger.info(f"  - LoRA Target Modules: {lora_args.lora_target_modules}")
+        logger.info(f"  - LoRA Bias: {lora_args.lora_bias}")
+        logger.info(f"  - Quantized Training (QLoRA): {is_qlora}")
+
     # Resolve target per user flag
     apply_to = args.anti_drift_apply_to
     if apply_to == "auto":
@@ -1286,9 +1299,7 @@ def main(log_file=None):
         label_names=["labels"],  # Quiet PEFT label warning
     )
 
-    logger.info("Starting supervised fine-tuning...")
-    logger.info(f"Model: {model_args.model_name_or_path}")
-    logger.info(f"Dataset: {data_args.dataset_name_or_path}")
+    logger.info("Starting training...")
     logger.info(f"Output directory: {args.output_dir}")
 
     # Log training mode
@@ -1416,9 +1427,12 @@ def main(log_file=None):
         )
 
         mask_handles = []
+        param_handles = []
         # Track union of selected channels per layer and applied mask mode for static estimates
         mask_union: Dict[str, List[int]] = {}
         applied_mask_mode: Optional[str] = None
+        ica_mask: Optional[Any] = None  # Initialize ica_mask to None
+        has_row_parametrizations = False  # Track if we applied row parametrizations
 
         if args.mask_mode is not None:
             # Initialize ICA mask handler
@@ -1584,7 +1598,6 @@ def main(log_file=None):
                     mode=global_mode,
                 )
 
-                param_handles = []
                 if args.mask_mode is not None and args.anti_drift_row_param:
                     # comp_ids already resolved; global_mode is 'lesion' or 'preserve'
                     ph = ica_mask.apply_row_parametrizations(
@@ -1595,7 +1608,9 @@ def main(log_file=None):
                         apply_to=apply_to,  # 'lora' | 'base' | 'both'
                         logger=logger,
                     )
-                    param_handles.extend(ph)
+                    # Note: ph contains tuples (module, tensor_name), not handles with .remove()
+                    # These will be cleaned up via ica_mask.remove_row_parametrizations()
+                    has_row_parametrizations = True
 
                 logger.info(f"Applied GLOBAL component masking: components={comp_ids}.")
 
@@ -1614,7 +1629,7 @@ def main(log_file=None):
             data_collator=data_collator,
         )
 
-        if args.anti_drift_row_param:
+        if args.anti_drift_row_param and ica_mask is not None:
             trainer.add_callback(NoDriftCheckCallback(model, ica_mask))
 
         # Resume from checkpoint if specified
@@ -1628,7 +1643,11 @@ def main(log_file=None):
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         logger.info(f"Trainable parameters: {trainable_params:,}")
 
-        if applied_mask_mode in ("lesion", "preserve") and mask_union:
+        if (
+            applied_mask_mode in ("lesion", "preserve")
+            and mask_union
+            and ica_mask is not None
+        ):
             masked_params_est = ica_mask.estimate_masked_params_for_lora_down_proj(
                 model, mask_union, applied_mask_mode
             )
@@ -1641,16 +1660,31 @@ def main(log_file=None):
         logger.info("Starting training...")
         trainer.train(resume_from_checkpoint=checkpoint)
 
+        # Clean up forward hooks
         for h in mask_handles:
             h.remove()
 
+        # Clean up any remaining forward hooks in param_handles (if any)
+        # Note: param_handles may contain tuples from row parametrizations, not hooks
         for h in param_handles:
-            h.remove()
+            if hasattr(h, "remove"):
+                h.remove()
 
-        # Optionally bake parametrizations into actual tensors for a clean save/merge
-        if args.anti_drift_unwrap_on_save and hasattr(
-            ica_mask, "remove_row_parametrizations"
+        # Clean up row parametrizations if they were applied
+        if (
+            has_row_parametrizations
+            and ica_mask is not None
+            and hasattr(ica_mask, "remove_row_parametrizations")
         ):
+            ica_mask.remove_row_parametrizations(
+                bake=args.anti_drift_unwrap_on_save, logger=logger
+            )
+        elif (
+            args.anti_drift_unwrap_on_save
+            and ica_mask is not None
+            and hasattr(ica_mask, "remove_row_parametrizations")
+        ):
+            # Fallback for backward compatibility
             ica_mask.remove_row_parametrizations(bake=True, logger=logger)
 
         final_output_dir = os.path.join(args.output_dir, "final_model")

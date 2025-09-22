@@ -223,6 +223,12 @@ class ICAMask:
         else:
             blocks = None
         if blocks is None:
+            # Log debug info about why blocks couldn't be found
+            model_class = type(actual_model).__name__
+            attrs = [attr for attr in dir(actual_model) if not attr.startswith("_")]
+            print(
+                f"DEBUG: Could not find transformer blocks in {model_class}. Available attributes: {attrs[:15]}"
+            )
             return None, None
 
         mlps: List[Optional[nn.Module]] = []
@@ -791,11 +797,41 @@ class ICAMask:
 
         # 1) Figure out MLPs & down_proj per layer (reuse your existing helper)
         if hasattr(self, "_find_decoder_blocks_and_mlps"):
-            _, mlps = self._find_decoder_blocks_and_mlps(
-                getattr(model, "base_model", model)
-            )
+            actual_model: Any = model
+            base_model = getattr(model, "base_model", None)
+            if base_model is not None:
+                actual_model = getattr(base_model, "model", base_model)
+            _, mlps = self._find_decoder_blocks_and_mlps(actual_model)
         else:
             raise RuntimeError("ICAMask missing _find_decoder_blocks_and_mlps")
+
+        # Check if MLPs were found
+        if mlps is None:
+            if logger:
+                # Get model info for debugging
+                config = getattr(model, "config", None)
+                model_type = (
+                    getattr(config, "model_type", "unknown") if config else "unknown"
+                )
+                model_class = type(model).__name__
+                base_model = actual_model
+                base_model_class = type(base_model).__name__
+
+                logger.warning(
+                    f"Could not find transformer blocks/MLPs for row parametrizations. "
+                    f"Model type: {model_type}, Model class: {model_class}, "
+                    f"Base model class: {base_model_class}"
+                )
+
+                # Log available attributes for debugging
+                if hasattr(base_model, "__dict__"):
+                    attrs = [
+                        attr for attr in dir(base_model) if not attr.startswith("_")
+                    ]
+                    logger.debug(
+                        f"Available model attributes: {attrs[:10]}..."
+                    )  # Show first 10
+            return []
 
         # 2) Convert layer selection to strings like your templates use
         #    If target_layers None -> use all MLP indices.
@@ -873,7 +909,7 @@ class ICAMask:
                         )
                         # initialize underlying delta to zeros
                         with torch.no_grad():
-                            lB.parametrizations.weight[0].original.zero_()
+                            lB.parametrizations.weight.original.zero_()
                         self._row_parametrizations.append((lB, "weight"))
 
                 # Optional bias on LoRA is uncommon; skip unless it exists:
@@ -889,7 +925,7 @@ class ICAMask:
                         RowMaskedDelta(row_mask=row_mask, frozen_weight=W.data),
                     )
                     with torch.no_grad():
-                        dp.parametrizations.weight[0].original.zero_()
+                        dp.parametrizations.weight.original.zero_()
                     self._row_parametrizations.append((dp, "weight"))
 
                 b = getattr(dp, "bias", None)
@@ -903,7 +939,7 @@ class ICAMask:
                         ),
                     )
                     with torch.no_grad():
-                        dp.parametrizations.bias[0].original.zero_()
+                        dp.parametrizations.bias.original.zero_()
                     self._row_parametrizations.append((dp, "bias"))
 
         if logger:

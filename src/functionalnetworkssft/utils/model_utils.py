@@ -278,6 +278,26 @@ def setup_lora(
         task_type=TaskType.CAUSAL_LM,
     )
 
+    # Log detailed LoRA configuration
+    logger.info("=" * 50)
+    logger.info("LORA CONFIGURATION DETAILS")
+    logger.info("=" * 50)
+    logger.info(f"LoRA Rank (r): {lora_r}")
+    logger.info(f"LoRA Alpha: {lora_alpha}")
+    logger.info(f"LoRA Dropout: {lora_dropout}")
+    logger.info(f"LoRA Bias: {lora_bias}")
+    logger.info(f"Task Type: {TaskType.CAUSAL_LM}")
+    logger.info(f"Target Modules: {target_modules}")
+    logger.info(
+        f"Number of Target Modules: {len(target_modules) if target_modules else 0}"
+    )
+    logger.info(f"Quantized Model: {is_quantized}")
+
+    # Calculate and log scaling factor
+    scaling_factor = lora_alpha / lora_r if lora_r > 0 else 0
+    logger.info(f"LoRA Scaling Factor (alpha/r): {scaling_factor:.4f}")
+    logger.info("=" * 50)
+
     # Apply LoRA to model
     model = get_peft_model(model, lora_config)
     if hasattr(model, "print_trainable_parameters"):

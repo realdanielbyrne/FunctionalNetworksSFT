@@ -38,11 +38,11 @@ instruction_max_length: 3200  # Maximum combined instruction length (including c
 lora_r: 16              # LoRA rank
 lora_alpha: 32          # LoRA alpha scaling
 lora_dropout: 0      # LoRA dropout (aligned with Exp A)
-lora_target_modules: null  # Auto-detect target modules
+lora_target_modules: ["down_proj"]  # Auto-detect target modules
 
 # Training Configuration
 #max_steps: 5 # Uncomment to override num_train_epochs
-num_train_epochs: 1
+num_train_epochs: 2
 
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 1
@@ -58,8 +58,8 @@ template_format: "auto" # Auto-detect chat template
 
 # Evaluation and Logging
 logging_steps: 100
-save_steps: 1000
-eval_steps: 1000
+save_steps: 2000
+eval_steps: 2000
 save_total_limit: 2
 load_best_model_at_end: true
 metric_for_best_model: "eval_loss"

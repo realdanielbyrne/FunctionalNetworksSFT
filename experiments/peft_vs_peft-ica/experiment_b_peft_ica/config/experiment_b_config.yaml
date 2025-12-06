@@ -42,7 +42,7 @@ instruction_max_length: 3200  # Maximum combined instruction length (including c
 lora_r: 16              # LoRA rank
 lora_alpha: 32          # LoRA alpha scaling
 lora_dropout: 0       # LoRA dropout (aligned with Exp A)
-lora_target_modules: ["down_proj", "dense_4h_to_h"]  
+lora_target_modules: ["down_proj"]  
 
 # Training Configuration
 #max_steps: 100 # Uncomment to override num_train_epochs

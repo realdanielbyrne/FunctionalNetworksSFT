@@ -1,0 +1,83 @@
+# =============================================================================
+# Common Configuration for PEFT vs PEFT-ICA Experiments
+# =============================================================================
+# This file contains all parameters shared across experiments A, B, and C.
+# Experiment-specific YAML files should only contain overrides for:
+# - mask_mode and ICA-related parameters
+# - output_dir, wandb_project, hub_repo_id (if customization needed)
+#
+# Configuration Loading Order (lowest to highest precedence):
+# 1. This file (common_config.yaml) - base shared settings
+# 2. Programmatic defaults in run_experiments.py - dynamic paths
+# 3. Experiment-specific YAML files - final overrides
+# =============================================================================
+
+# Model configuration
+model_name_or_path: "WeiboAI/VibeThinker-1.5B"
+torch_dtype: "auto"  # Use platform-optimized dtype
+use_4bit: false
+use_8bit: false
+attn_implementation: "auto"
+
+# Dataset configuration
+dataset_name_or_path: "camel-ai/physics"
+validation_split: 0.1  # 10% for validation
+
+# Dataset preprocessing parameters
+response_max_length: 10000     # Maximum response field length
+instruction_max_length: 5000  # Maximum combined instruction length (including context)
+
+# PEFT Configuration (LoRA)
+lora_r: 16              # LoRA rank
+lora_alpha: 32          # LoRA alpha scaling
+lora_dropout: 0         # LoRA dropout
+lora_target_modules: null  # Auto-detect target modules (can be overridden per experiment)
+
+# Training Configuration
+num_train_epochs: 1
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 0.0002   # Higher learning rate for PEFT
+weight_decay: 0.0001
+warmup_ratio: 0.05
+lr_scheduler_type: "cosine"
+
+# Sequence and Template Configuration
+max_seq_length: 4196
+template_format: "auto"  # Auto-detect chat template
+
+# Evaluation and Logging
+logging_steps: 100
+save_steps: 1000
+eval_steps: 1000
+save_total_limit: 2
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+evaluation_strategy: "steps"
+
+# Memory optimization
+gradient_checkpointing: false
+
+# Monitoring
+use_wandb: true
+# wandb_project: Set per experiment in experiment-specific YAML or programmatically
+
+# Hub upload (merged model)
+push_to_hub: false
+# hub_repo_id: Set per experiment in experiment-specific YAML or programmatically
+# hub_commit_message: Set per experiment in experiment-specific YAML or programmatically
+hub_private: false
+merge_adapter_with_base: true  # Merge adapter with base model
+upload_merged_model: true      # Upload merged model to Hub instead of adapter
+
+# Additional options
+resume_from_checkpoint: null
+convert_to_gguf: false
+
+# Anti-drift configuration
+anti_drift_apply_to: "both"
+
+# Authentication
+use_auth_token: true  # For gated model access
+

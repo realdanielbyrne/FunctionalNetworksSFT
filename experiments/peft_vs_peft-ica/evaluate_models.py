@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-Evaluate and compare Experiments A (PEFT-only), B (PEFT+ICA lesion), and C (PEFT+ICA preserve).
+Model Evaluation and Comparison Script
+
+Evaluates and compares trained models from the three experiments:
+- Experiment A: PEFT-only fine-tuning
+- Experiment B: PEFT + ICA masking (lesion mode)
+- Experiment C: PEFT + ICA masking (preserve mode)
+
+Configuration Architecture:
+    This script uses the centralized configuration from common_config.yaml to determine
+    dataset settings and model paths. Experiment output directories are derived from
+    the experiment-specific overrides defined in run_experiments.py.
 
 Features:
 - Loads trained models from experiment output directories (prefers merged_model if present)
@@ -13,6 +23,11 @@ Features:
 - Statistical testing: bootstrap 95% CI and p-values for pairwise NLL comparisons
 - Visualizations: bar charts with error bars saved as PNG
 - Outputs JSON files per experiment and a combined comparison plus a Markdown summary
+
+Usage:
+    python experiments/peft_vs_peft-ica/evaluate_models.py
+    python experiments/peft_vs_peft-ica/evaluate_models.py --test-size 0.3
+    python experiments/peft_vs_peft-ica/evaluate_models.py --output-dir custom_results
 """
 
 import argparse
@@ -83,10 +98,20 @@ def find_best_model_dir(exp_output_dir: str) -> Optional[str]:
             return p
 
     # If none found, maybe the output dir itself is a model dir
-    return exp_output_dir if any(
-        os.path.exists(os.path.join(exp_output_dir, f))
-        for f in ["config.json", "adapter_config.json", "pytorch_model.bin", "model.safetensors", "adapter_model.safetensors"]
-    ) else None
+    return (
+        exp_output_dir
+        if any(
+            os.path.exists(os.path.join(exp_output_dir, f))
+            for f in [
+                "config.json",
+                "adapter_config.json",
+                "pytorch_model.bin",
+                "model.safetensors",
+                "adapter_model.safetensors",
+            ]
+        )
+        else None
+    )
 
 
 def load_tokenizer_and_model(model_dir: str):
@@ -119,7 +144,9 @@ def format_prompt(example: Dict[str, str]) -> Tuple[str, str]:
     return prompt, ""
 
 
-def build_eval_split(dataset_name_or_path: str, test_size: float, max_samples: Optional[int]) -> List[Dict[str, str]]:
+def build_eval_split(
+    dataset_name_or_path: str, test_size: float, max_samples: Optional[int]
+) -> List[Dict[str, str]]:
     ds = load_dataset(dataset_name_or_path)
     # Use train split or merge if multiple
     split_name = "train" if "train" in ds else list(ds.keys())[0]
@@ -140,14 +167,23 @@ def build_eval_split(dataset_name_or_path: str, test_size: float, max_samples: O
     return examples
 
 
-def compute_per_example_nll(tok, model, device, prompts: List[str], references: List[str], max_new_tokens: int = 128) -> Tuple[np.ndarray, List[str]]:
+def compute_per_example_nll(
+    tok,
+    model,
+    device,
+    prompts: List[str],
+    references: List[str],
+    max_new_tokens: int = 128,
+) -> Tuple[np.ndarray, List[str]]:
     """Compute per-example NLL over the generated continuation tokens when teacher-forcing on reference.
     Also returns generated outputs for optional generation metrics.
     """
     nlls = []
     generations = []
 
-    for prompt, reference in tqdm(zip(prompts, references), total=len(prompts), desc="Evaluating"):
+    for prompt, reference in tqdm(
+        zip(prompts, references), total=len(prompts), desc="Evaluating"
+    ):
         # Build input ids as prompt + reference, compute loss over reference tokens only
         with torch.no_grad():
             enc_prompt = tok(prompt, return_tensors="pt")
@@ -182,7 +218,9 @@ def compute_per_example_nll(tok, model, device, prompts: List[str], references: 
     return np.array(nlls, dtype=np.float32), generations
 
 
-def bootstrap_diff_ci(a: np.ndarray, b: np.ndarray, n_boot: int = 1000, seed: int = 42) -> Dict[str, float]:
+def bootstrap_diff_ci(
+    a: np.ndarray, b: np.ndarray, n_boot: int = 1000, seed: int = 42
+) -> Dict[str, float]:
     rng = np.random.RandomState(seed)
     diffs = []
     n = min(len(a), len(b))
@@ -192,7 +230,12 @@ def bootstrap_diff_ci(a: np.ndarray, b: np.ndarray, n_boot: int = 1000, seed: in
     diffs = np.array(diffs)
     ci_low, ci_high = np.percentile(diffs, [2.5, 97.5])
     p_value = float(min(np.mean(diffs <= 0), np.mean(diffs >= 0)) * 2)
-    return {"diff_mean": float(np.mean(diffs)), "ci_low": float(ci_low), "ci_high": float(ci_high), "p_value": p_value}
+    return {
+        "diff_mean": float(np.mean(diffs)),
+        "ci_low": float(ci_low),
+        "ci_high": float(ci_high),
+        "p_value": p_value,
+    }
 
 
 def sentence_bleu_scores(references: List[str], predictions: List[str]) -> np.ndarray:
@@ -208,7 +251,9 @@ def sentence_bleu_scores(references: List[str], predictions: List[str]) -> np.nd
     return np.array(scores, dtype=np.float32)
 
 
-def rougeL_aggregate(references: List[str], predictions: List[str]) -> Optional[Dict[str, float]]:
+def rougeL_aggregate(
+    references: List[str], predictions: List[str]
+) -> Optional[Dict[str, float]]:
     if hf_evaluate is None:
         return None
     try:
@@ -219,7 +264,16 @@ def rougeL_aggregate(references: List[str], predictions: List[str]) -> Optional[
         return None
 
 
-def plot_bars(output_dir: str, title: str, labels: List[str], values: List[float], y_label: str, filename: str, errors: Optional[List[float]] = None, invert: bool = False):
+def plot_bars(
+    output_dir: str,
+    title: str,
+    labels: List[str],
+    values: List[float],
+    y_label: str,
+    filename: str,
+    errors: Optional[List[float]] = None,
+    invert: bool = False,
+):
     try:
         import matplotlib.pyplot as plt
     except Exception:
@@ -241,7 +295,9 @@ def plot_bars(output_dir: str, title: str, labels: List[str], values: List[float
     plt.close(fig)
 
 
-def evaluate_model_dir(model_dir: str, eval_examples: List[Dict[str, str]], max_new_tokens: int = 128) -> Dict[str, any]:
+def evaluate_model_dir(
+    model_dir: str, eval_examples: List[Dict[str, str]], max_new_tokens: int = 128
+) -> Dict[str, any]:
     tok, model, device = load_tokenizer_and_model(model_dir)
     prompts = [e["prompt"] for e in eval_examples]
     refs = [e["reference"] for e in eval_examples]
@@ -251,9 +307,13 @@ def evaluate_model_dir(model_dir: str, eval_examples: List[Dict[str, str]], max_
 
     bleu_scores = sentence_bleu_scores(refs, generations)
     rouge_res = rougeL_aggregate(refs, generations)
-    len_ratios = np.array([
-        (len(g.split()) / max(1, len(r.split()))) if r else float("nan") for g, r in zip(generations, refs)
-    ], dtype=np.float32)
+    len_ratios = np.array(
+        [
+            (len(g.split()) / max(1, len(r.split()))) if r else float("nan")
+            for g, r in zip(generations, refs)
+        ],
+        dtype=np.float32,
+    )
 
     return {
         "nll_per_example": nlls.tolist(),
@@ -262,7 +322,11 @@ def evaluate_model_dir(model_dir: str, eval_examples: List[Dict[str, str]], max_
         "bleu_mean": float(np.mean(bleu_scores)) if len(bleu_scores) else None,
         "rouge": rouge_res,
         "length_ratio_mean": float(np.nanmean(len_ratios)),
-        "avg_gen_length": float(np.mean([len(g.split()) for g in generations])) if generations else 0.0,
+        "avg_gen_length": (
+            float(np.mean([len(g.split()) for g in generations]))
+            if generations
+            else 0.0
+        ),
     }
 
 
@@ -281,10 +345,16 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate Experiments A, B, C")
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--max-samples", type=int, default=256)
-    parser.add_argument("--output-dir", type=str, default="experiments/peft_vs_peft-ica/evaluation_results")
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="experiments/peft_vs_peft-ica/evaluation_results",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
     # Locate model directories
     exp_dirs = {
@@ -323,11 +393,14 @@ def main():
             results[label] = evaluate_model_dir(model_path, eval_examples)
 
         # Save per-experiment JSON
-        with open(os.path.join(args.output_dir, f"experiment_{label}_results.json"), "w") as f:
+        with open(
+            os.path.join(args.output_dir, f"experiment_{label}_results.json"), "w"
+        ) as f:
             json.dump(results[label], f, indent=2)
 
     # Statistical tests: compare A vs best-of-B, A vs best-of-C, and B vs C (best vs best)
     stats = {}
+
     def best_nlls(res):
         if "runs" in res:
             # pick best run's nlls
@@ -336,11 +409,17 @@ def main():
         return np.array(res.get("nll_per_example", []), dtype=np.float32)
 
     if "A" in results and "B" in results:
-        stats["A_vs_B"] = bootstrap_diff_ci(best_nlls(results["A"]), best_nlls(results["B"]))
+        stats["A_vs_B"] = bootstrap_diff_ci(
+            best_nlls(results["A"]), best_nlls(results["B"])
+        )
     if "A" in results and "C" in results:
-        stats["A_vs_C"] = bootstrap_diff_ci(best_nlls(results["A"]), best_nlls(results["C"]))
+        stats["A_vs_C"] = bootstrap_diff_ci(
+            best_nlls(results["A"]), best_nlls(results["C"])
+        )
     if "B" in results and "C" in results:
-        stats["B_vs_C"] = bootstrap_diff_ci(best_nlls(results["B"]), best_nlls(results["C"]))
+        stats["B_vs_C"] = bootstrap_diff_ci(
+            best_nlls(results["B"]), best_nlls(results["C"])
+        )
 
     with open(os.path.join(args.output_dir, "model_comparison.json"), "w") as f:
         json.dump({"results": results, "stats": stats}, f, indent=2)
@@ -361,7 +440,15 @@ def main():
             ppl_vals.append(results[label]["ppl"])
             ppl_err.append(0.0)
 
-    plot_bars(args.output_dir, "Perplexity (lower is better)", labels, ppl_vals, "PPL", "perplexity.png", errors=ppl_err)
+    plot_bars(
+        args.output_dir,
+        "Perplexity (lower is better)",
+        labels,
+        ppl_vals,
+        "PPL",
+        "perplexity.png",
+        errors=ppl_err,
+    )
 
     # Markdown summary
     md_lines = [
@@ -379,14 +466,18 @@ def main():
         if label not in results:
             continue
         if "runs" in results[label]:
-            md_lines.append(f"- {label}: mean PPL={results[label]['ppl_mean']:.3f} ± {results[label]['ppl_std']:.3f} (best={results[label]['best_ppl']:.3f})")
+            md_lines.append(
+                f"- {label}: mean PPL={results[label]['ppl_mean']:.3f} ± {results[label]['ppl_std']:.3f} (best={results[label]['best_ppl']:.3f})"
+            )
         else:
             md_lines.append(f"- {label}: PPL={results[label]['ppl']:.3f}")
 
     md_lines.append("")
     md_lines.append("## Pairwise NLL Statistical Tests (bootstrap 95% CI)")
     for k, v in stats.items():
-        md_lines.append(f"- {k}: diff_mean={v['diff_mean']:.4f} (A-B < 0 favors first), 95% CI=({v['ci_low']:.4f}, {v['ci_high']:.4f}), p={v['p_value']:.4f}")
+        md_lines.append(
+            f"- {k}: diff_mean={v['diff_mean']:.4f} (A-B < 0 favors first), 95% CI=({v['ci_low']:.4f}, {v['ci_high']:.4f}), p={v['p_value']:.4f}"
+        )
 
     md_lines.append("")
     md_lines.append("## Generation Metrics (if available)")
@@ -400,14 +491,20 @@ def main():
             bleu = best.get("bleu_mean")
             rouge = best.get("rouge", {}).get("rougeL") if best.get("rouge") else None
             lr = best.get("length_ratio_mean")
-            md_lines.append(f"- {label} (best run): BLEU={bleu if bleu is not None else 'n/a'}, ROUGE-L={rouge if rouge is not None else 'n/a'}, LenRatio={lr:.3f}")
+            md_lines.append(
+                f"- {label} (best run): BLEU={bleu if bleu is not None else 'n/a'}, ROUGE-L={rouge if rouge is not None else 'n/a'}, LenRatio={lr:.3f}"
+            )
         else:
             bleu = res.get("bleu_mean")
             rouge = res.get("rouge", {}).get("rougeL") if res.get("rouge") else None
             lr = res.get("length_ratio_mean")
-            md_lines.append(f"- {label}: BLEU={bleu if bleu is not None else 'n/a'}, ROUGE-L={rouge if rouge is not None else 'n/a'}, LenRatio={lr:.3f}")
+            md_lines.append(
+                f"- {label}: BLEU={bleu if bleu is not None else 'n/a'}, ROUGE-L={rouge if rouge is not None else 'n/a'}, LenRatio={lr:.3f}"
+            )
 
-    with open(os.path.join(args.output_dir, "evaluation_summary.md"), "w" , encoding="utf-8") as f:
+    with open(
+        os.path.join(args.output_dir, "evaluation_summary.md"), "w", encoding="utf-8"
+    ) as f:
         f.write("\n".join(md_lines))
 
     logging.info("Evaluation complete. Results saved to %s", args.output_dir)
@@ -415,4 +512,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

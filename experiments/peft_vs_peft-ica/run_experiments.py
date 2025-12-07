@@ -7,14 +7,10 @@ This script runs comprehensive fine-tuning experiments comparing three approache
 - Experiment B: PEFT (LoRA) + ICA masking (lesion mode)
 - Experiment C: PEFT (LoRA) + ICA masking (preserve mode)
 
-Both experiments use the meta-llama/Llama-3.2-1B-Instruct model and mental health dataset.
-
-Data Preprocessing:
-Both experiments apply consistent data preprocessing to ensure fair comparison:
-- Filter Context field: Remove rows where Context length > 1500 characters
-- Filter Response field: Remove rows where Response length > 4000 characters
-- Applied sequentially to maintain data integrity
-- Preprocessing statistics are logged for transparency
+Configuration Architecture:
+- All shared parameters are defined in common_config.yaml (single source of truth)
+- Experiment-specific differences (ICA settings) are defined in Python code
+- Merged configs are created dynamically for each experiment run
 
 Usage:
     python experiments/peft_vs_peft-ica/run_experiments.py [--experiment {a,b,c,all}] [--verbose]
@@ -35,11 +31,115 @@ import time
 import yaml
 from datetime import datetime
 from pathlib import Path
+from copy import deepcopy
 
 try:
     import torch
 except ImportError:
     torch = None
+
+
+# =============================================================================
+# EXPERIMENT DEFINITIONS
+# =============================================================================
+# Only the parameters that DIFFER between experiments are defined here.
+# All shared parameters are in common_config.yaml (single source of truth).
+# =============================================================================
+
+# Experiment A: PEFT only (no ICA masking)
+EXPERIMENT_A_OVERRIDES = {
+    "output_dir": "experiments/peft_vs_peft-ica/experiment_a_peft_only/output",
+    "wandb_project": "VibeThinker-1.5B-Physics-PEFT-Only",
+    "hub_repo_id": "realdanielbyrne/VibeThinker-1.5B-Physics",
+    "hub_commit_message": "1 Epoch Physics, PEFT Only",
+    "mask_mode": None,  # No ICA masking
+}
+
+# Experiment B: PEFT + ICA masking (lesion mode)
+EXPERIMENT_B_OVERRIDES = {
+    "output_dir": "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output",
+    "wandb_project": "VibeThinker-1.5B-Physics-Fnsft-PEFT+ICA-Lesion",
+    "hub_repo_id": "realdanielbyrne/VibeThinker-1.5B-Instruct-Physics-PEFT+ICA-Lesion",
+    "hub_commit_message": "1 Epoch Physics, Components [0,1], Lesion",
+    "mask_mode": "lesion",
+    "lora_target_modules": ["down_proj"],
+    "ica_template_path": "ica_templates/vibethinker-1.5B/camel-ai_physics/global_templates.json",
+    "ica_components": 5,
+    "ica_percentile": 98.0,
+    "ica_component_ids": [0, 1],
+}
+
+# Experiment C: PEFT + ICA masking (preserve mode)
+EXPERIMENT_C_OVERRIDES = {
+    "output_dir": "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output",
+    "wandb_project": "VibeThinker1.5B-Physics-PEFT+ICA-Preserve",
+    "hub_repo_id": "realdanielbyrne/VibeThinker-1.5B-Physics-Fnsft-PEFT+ICA-Preserve",
+    "hub_commit_message": "1 Epoch, Physics, Components [0,1] preserved",
+    "mask_mode": "preserve",
+    "lora_target_modules": ["down_proj"],
+    "ica_template_path": "ica_templates/vibethinker-1.5B/camel-ai_physics/global_templates.json",
+    "ica_components": 5,
+    "ica_percentile": 98.0,
+    "ica_component_ids": [0, 1],
+}
+
+# Map experiment names to their overrides
+EXPERIMENT_OVERRIDES = {
+    "a": EXPERIMENT_A_OVERRIDES,
+    "b": EXPERIMENT_B_OVERRIDES,
+    "c": EXPERIMENT_C_OVERRIDES,
+}
+
+# Base directory for experiments
+BASE_OUTPUT_DIR = "experiments/peft_vs_peft-ica"
+
+
+def create_experiment_config(experiment_name):
+    """
+    Create experiment-specific configuration by merging common_config.yaml with experiment overrides.
+
+    Configuration Loading Order:
+    1. common_config.yaml - All shared parameters (single source of truth)
+    2. Experiment-specific overrides - Only ICA/masking differences defined in Python
+
+    Args:
+        experiment_name: Name of experiment ('a', 'b', or 'c')
+
+    Returns:
+        Tuple of (merged_config_dict, temp_config_path)
+    """
+    logger = logging.getLogger(__name__)
+
+    if experiment_name not in EXPERIMENT_OVERRIDES:
+        raise ValueError(
+            f"Unknown experiment: {experiment_name}. Must be 'a', 'b', or 'c'"
+        )
+
+    # Path to common configuration (single source of truth)
+    common_config_path = f"{BASE_OUTPUT_DIR}/common_config.yaml"
+
+    # Temp config path for this experiment
+    temp_config_path = f"{BASE_OUTPUT_DIR}/temp_config_{experiment_name}.yaml"
+
+    # Step 1: Load common configuration
+    if not os.path.exists(common_config_path):
+        logger.error(f"Common config not found: {common_config_path}")
+        raise FileNotFoundError(
+            f"Required common config file not found: {common_config_path}"
+        )
+
+    logger.info(f"Loading common config from {common_config_path}")
+    with open(common_config_path, "r") as f:
+        merged_config = yaml.safe_load(f) or {}
+
+    # Step 2: Apply experiment-specific overrides
+    experiment_overrides = EXPERIMENT_OVERRIDES[experiment_name]
+    logger.info(
+        f"Applying experiment {experiment_name.upper()} overrides: mask_mode={experiment_overrides.get('mask_mode')}"
+    )
+    merged_config.update(experiment_overrides)
+
+    return merged_config, temp_config_path
 
 
 def clear_cuda_memory():
@@ -74,103 +174,109 @@ def setup_logging(verbose=False):
     return logging.getLogger(__name__)
 
 
-def run_experiment_a():
-    """Run Experiment A: PEFT-only fine-tuning"""
+def run_experiment(experiment_name):
+    """
+    Run a single experiment by merging common config with experiment-specific overrides.
+
+    Args:
+        experiment_name: Name of experiment ('a', 'b', or 'c')
+
+    Returns:
+        bool: True if experiment succeeded, False otherwise
+    """
+    from functionalnetworkssft.fnsft_trainer import main as fnsft_main
+
     logger = logging.getLogger(__name__)
-    logger.info("Starting Experiment A: PEFT-only fine-tuning")
+    experiment_labels = {
+        "a": "Experiment A: PEFT-only fine-tuning",
+        "b": "Experiment B: PEFT + ICA masking (lesion mode)",
+        "c": "Experiment C: PEFT + ICA masking (preserve mode)",
+    }
+
+    logger.info(
+        f"Starting {experiment_labels.get(experiment_name, f'Experiment {experiment_name}')}"
+    )
 
     # Save current directory and change to project root
     original_cwd = os.getcwd()
     project_root = Path(__file__).parent.parent.parent
     os.chdir(project_root)
 
+    temp_config_path = None
     try:
-        # Import and run experiment A
-        sys.path.insert(
-            0, str(Path(__file__).parent / "experiment_a_peft_only" / "scripts")
-        )
-        from run_experiment_a import run_experiment_a as run_a
+        # Create merged configuration
+        merged_config, temp_config_path = create_experiment_config(experiment_name)
+
+        # Write merged config to temporary file
+        os.makedirs(os.path.dirname(temp_config_path), exist_ok=True)
+        with open(temp_config_path, "w") as f:
+            yaml.dump(merged_config, f, default_flow_style=False, sort_keys=False)
+        logger.info(f"Created merged config at {temp_config_path}")
+
+        # Set up sys.argv for fnsft_main
+        original_argv = sys.argv.copy()
+        sys.argv = ["fnsft_trainer.py", "--config", temp_config_path]
+
+        # Experiment-specific log file
+        output_dir = merged_config.get("output_dir", BASE_OUTPUT_DIR)
+        os.makedirs(output_dir, exist_ok=True)
+        log_file_path = os.path.join(output_dir, f"experiment_{experiment_name}.log")
 
         start_time = time.time()
-        success = run_a()
-        end_time = time.time()
 
+        # Run training
+        fnsft_main(log_file=log_file_path)
+
+        end_time = time.time()
         duration = end_time - start_time
-        logger.info(f"Experiment A completed in {duration:.2f} seconds")
+        logger.info(
+            f"Experiment {experiment_name.upper()} completed in {duration:.2f} seconds"
+        )
+
+        # Restore sys.argv
+        sys.argv = original_argv
 
         # Clear CUDA memory after experiment
         clear_cuda_memory()
 
-        return success
+        return True
+
     except Exception as e:
-        logger.error(f"Experiment A failed: {str(e)}")
+        logger.error(f"Experiment {experiment_name.upper()} failed: {str(e)}")
+        import traceback
+
+        logger.error(traceback.format_exc())
         # Clear CUDA memory even on failure
         clear_cuda_memory()
         return False
+
     finally:
+        # Clean up temporary config
+        if temp_config_path:
+            try:
+                if os.path.exists(temp_config_path):
+                    os.remove(temp_config_path)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to clean up temp config {temp_config_path}: {e}"
+                )
         # Restore original directory
         os.chdir(original_cwd)
 
 
+def run_experiment_a():
+    """Run Experiment A: PEFT-only fine-tuning"""
+    return run_experiment("a")
+
+
 def run_experiment_b():
-    """Run Experiment B: PEFT + ICA masking fine-tuning"""
-    logger = logging.getLogger(__name__)
-    logger.info("Starting Experiment B: PEFT + ICA masking fine-tuning")
-
-    try:
-        # Import and run experiment B
-        sys.path.insert(
-            0, str(Path(__file__).parent / "experiment_b_peft_ica" / "scripts")
-        )
-        from run_experiment_b import run_experiment_b as run_b
-
-        start_time = time.time()
-        success = run_b()
-        end_time = time.time()
-
-        duration = end_time - start_time
-        logger.info(f"Experiment B completed in {duration:.2f} seconds")
-
-        # Clear CUDA memory after experiment
-        clear_cuda_memory()
-
-        return success
-    except Exception as e:
-        logger.error(f"Experiment B failed: {str(e)}")
-        # Clear CUDA memory even on failure
-        clear_cuda_memory()
-        return False
+    """Run Experiment B: PEFT + ICA masking fine-tuning (lesion mode)"""
+    return run_experiment("b")
 
 
 def run_experiment_c():
     """Run Experiment C: PEFT + ICA masking fine-tuning (preserve mode)"""
-    logger = logging.getLogger(__name__)
-    logger.info("Starting Experiment C: PEFT + ICA masking fine-tuning (preserve mode)")
-
-    try:
-        # Import and run experiment C
-        sys.path.insert(
-            0,
-            str(Path(__file__).parent / "experiment_c_peft_ica_preserve" / "scripts"),
-        )
-        from run_experiment_c import run_experiment_c_preserve as run_c
-
-        start_time = time.time()
-        success = run_c()
-        end_time = time.time()
-
-        duration = end_time - start_time
-        logger.info(f"Experiment C completed in {duration:.2f} seconds")
-
-        # Clear CUDA memory after experiment
-        clear_cuda_memory()
-
-        return success
-    except Exception as e:
-        logger.error(f"Experiment C failed: {str(e)}")
-        # Clear CUDA memory even on failure
-        clear_cuda_memory()
-        return False
+    return run_experiment("c")
 
 
 def run_evaluation():
@@ -215,99 +321,60 @@ def run_evaluation():
 
 
 def print_experiment_summary():
-    """Print a summary of the experiment setup"""
-    # Load configs to get actual values
-    config_a_path = "experiments/peft_vs_peft-ica/experiment_a_peft_only/config/experiment_a_config.yaml"
-    config_b_path = "experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml"
-    config_c_path = "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/config/experiment_c_config.yaml"
+    """Print a summary of the experiment setup using the centralized configuration."""
+    # Load common config (single source of truth for shared parameters)
+    common_config_path = f"{BASE_OUTPUT_DIR}/common_config.yaml"
 
-    config_a = {}
-    config_b = {}
-    config_c = {}
-
-    # Load config A
+    common_config = {}
     try:
-        with open(config_a_path, "r") as f:
-            config_a = yaml.safe_load(f) or {}
+        with open(common_config_path, "r") as f:
+            common_config = yaml.safe_load(f) or {}
     except (FileNotFoundError, yaml.YAMLError) as e:
-        print(f"Warning: Could not load config A ({config_a_path}): {e}")
-        print("Using fallback values for Experiment A")
+        print(f"Warning: Could not load common config ({common_config_path}): {e}")
 
-    # Load config B
-    try:
-        with open(config_b_path, "r") as f:
-            config_b = yaml.safe_load(f) or {}
-    except (FileNotFoundError, yaml.YAMLError) as e:
-        print(f"Warning: Could not load config B ({config_b_path}): {e}")
-        print("Using fallback values for Experiment B")
-
-    # Load config C
-    try:
-        with open(config_c_path, "r") as f:
-            config_c = yaml.safe_load(f) or {}
-    except (FileNotFoundError, yaml.YAMLError) as e:
-        print(f"Warning: Could not load config C ({config_c_path}): {e}")
-        print("Using fallback values for Experiment C")
+    # Get experiment-specific overrides
+    exp_a = EXPERIMENT_A_OVERRIDES
+    exp_b = EXPERIMENT_B_OVERRIDES
+    exp_c = EXPERIMENT_C_OVERRIDES
 
     print("=" * 80)
     print("FINE-TUNING EXPERIMENT COMPARISON")
     print("=" * 80)
-    print(f"Model: {config_b.get('model_name_or_path', '[CONFIG NOT LOADED]')}")
-    print(f"Dataset: {config_b.get('dataset_name_or_path', '[CONFIG NOT LOADED]')}")
+    print(f"Model: {common_config.get('model_name_or_path', '[CONFIG NOT LOADED]')}")
     print(
-        f"Training Epochs: {config_b.get('num_train_epochs', '[CONFIG NOT LOADED]')}\n"
+        f"Dataset: {common_config.get('dataset_name_or_path', '[CONFIG NOT LOADED]')}"
     )
-    print("Data Preprocessing:")
-    print("  - Context field length filter: ≤ 1500 characters")
-    print("  - Response field length filter: ≤ 4000 characters")
-    print("  - Applied consistently to both experiments for fair comparison\n")
+    print(
+        f"Training Epochs: {common_config.get('num_train_epochs', '[CONFIG NOT LOADED]')}"
+    )
+    print(f"LoRA rank: {common_config.get('lora_r', '[CONFIG NOT LOADED]')}")
+    print(f"LoRA alpha: {common_config.get('lora_alpha', '[CONFIG NOT LOADED]')}\n")
+
+    print("Data Preprocessing (identical across all experiments):")
+    print(f"  - Response max length: {common_config.get('response_max_length', 'N/A')}")
+    print(
+        f"  - Instruction max length: {common_config.get('instruction_max_length', 'N/A')}\n"
+    )
+
     print("Experiment A: PEFT (LoRA) only")
-    print(f"  - LoRA rank: {config_a.get('lora_r', '[CONFIG NOT LOADED]')}")
-    print(f"  - LoRA alpha: {config_a.get('lora_alpha', '[CONFIG NOT LOADED]')}")
-    print(
-        f"  - ICA masking:{'DISABLED' if config_a.get('mask_mode') is None else 'ENABLED'}\n"
-    )
-    print("Experiment B: PEFT (LoRA) + ICA masking")
-    print(
-        f"  - LoRA rank: {config_b.get('lora_r', '[CONFIG NOT LOADED]')} (identical to A)"
-    )
-    print(
-        f"  - LoRA alpha: {config_b.get('lora_alpha', '[CONFIG NOT LOADED]')} (identical to A)"
-    )
+    print(f"  - ICA masking: DISABLED")
+    print(f"  - Output: {exp_a.get('output_dir')}\n")
 
-    mask_mode = config_b.get("mask_mode", "[CONFIG NOT LOADED]")
-    if mask_mode and mask_mode != "[CONFIG NOT LOADED]":
-        print(f"  - ICA masking: ENABLED ({mask_mode} mode)")
-    else:
-        print(f"  - ICA masking: {mask_mode}")
-
-    print(
-        f"  - ICA components: {config_b.get('ica_components', '[CONFIG NOT LOADED]')}"
-    )
-    print(
-        f"  - ICA percentile: {config_b.get('ica_percentile', '[CONFIG NOT LOADED]')}"
-    )
+    print("Experiment B: PEFT (LoRA) + ICA masking (lesion)")
+    print(f"  - ICA masking: ENABLED ({exp_b.get('mask_mode')} mode)")
+    print(f"  - ICA components: {exp_b.get('ica_components')}")
+    print(f"  - ICA component IDs: {exp_b.get('ica_component_ids')}")
+    print(f"  - ICA percentile: {exp_b.get('ica_percentile')}")
+    print(f"  - LoRA target modules: {exp_b.get('lora_target_modules')}")
+    print(f"  - Output: {exp_b.get('output_dir')}\n")
 
     print("Experiment C: PEFT (LoRA) + ICA masking (preserve)")
-    print(
-        f"  - LoRA rank: {config_c.get('lora_r', '[CONFIG NOT LOADED]')} (identical to A/B)"
-    )
-    print(
-        f"  - LoRA alpha: {config_c.get('lora_alpha', '[CONFIG NOT LOADED]')} (identical to A/B)"
-    )
-
-    mask_mode_c = config_c.get("mask_mode", "[CONFIG NOT LOADED]")
-    if mask_mode_c and mask_mode_c != "[CONFIG NOT LOADED]":
-        print(f"  - ICA masking: ENABLED ({mask_mode_c} mode)")
-    else:
-        print(f"  - ICA masking: {mask_mode_c}")
-
-    print(
-        f"  - ICA components: {config_c.get('ica_components', '[CONFIG NOT LOADED]')}"
-    )
-    print(
-        f"  - ICA percentile: {config_c.get('ica_percentile', '[CONFIG NOT LOADED]')}"
-    )
+    print(f"  - ICA masking: ENABLED ({exp_c.get('mask_mode')} mode)")
+    print(f"  - ICA components: {exp_c.get('ica_components')}")
+    print(f"  - ICA component IDs: {exp_c.get('ica_component_ids')}")
+    print(f"  - ICA percentile: {exp_c.get('ica_percentile')}")
+    print(f"  - LoRA target modules: {exp_c.get('lora_target_modules')}")
+    print(f"  - Output: {exp_c.get('output_dir')}")
     print("=" * 80)
 
 

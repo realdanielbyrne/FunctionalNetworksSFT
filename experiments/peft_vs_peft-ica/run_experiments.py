@@ -94,6 +94,31 @@ EXPERIMENT_OVERRIDES = {
 BASE_OUTPUT_DIR = "experiments/peft_vs_peft-ica"
 
 
+def find_last_checkpoint(output_dir):
+    """Return path to the latest checkpoint directory in output_dir, or None."""
+    if not os.path.isdir(output_dir):
+        return None
+
+    checkpoints = []
+    for name in os.listdir(output_dir):
+        path = os.path.join(output_dir, name)
+        if not os.path.isdir(path):
+            continue
+        if not name.startswith("checkpoint-"):
+            continue
+        try:
+            step = int(name.split("-")[-1])
+        except ValueError:
+            continue
+        checkpoints.append((step, path))
+
+    if not checkpoints:
+        return None
+
+    checkpoints.sort(key=lambda item: item[0])
+    return checkpoints[-1][1]
+
+
 def create_experiment_config(experiment_name):
     """
     Create experiment-specific configuration by merging common_config.yaml with experiment overrides.
@@ -174,7 +199,7 @@ def setup_logging(verbose=False):
     return logging.getLogger(__name__)
 
 
-def run_experiment(experiment_name):
+def run_experiment(experiment_name, resume_from_last_checkpoint=False):
     """
     Run a single experiment by merging common config with experiment-specific overrides.
 
@@ -206,6 +231,19 @@ def run_experiment(experiment_name):
     try:
         # Create merged configuration
         merged_config, temp_config_path = create_experiment_config(experiment_name)
+
+        if resume_from_last_checkpoint:
+            output_dir = merged_config.get("output_dir", BASE_OUTPUT_DIR)
+            last_checkpoint = find_last_checkpoint(output_dir)
+            if last_checkpoint:
+                merged_config["resume_from_checkpoint"] = last_checkpoint
+                logger.info(
+                    f"Resuming {experiment_name.upper()} from last checkpoint: {last_checkpoint}"
+                )
+            else:
+                logger.warning(
+                    f"No checkpoints found in {output_dir}; starting {experiment_name.upper()} from scratch"
+                )
 
         # Write merged config to temporary file
         os.makedirs(os.path.dirname(temp_config_path), exist_ok=True)
@@ -264,19 +302,19 @@ def run_experiment(experiment_name):
         os.chdir(original_cwd)
 
 
-def run_experiment_a():
+def run_experiment_a(resume_from_last_checkpoint=False):
     """Run Experiment A: PEFT-only fine-tuning"""
-    return run_experiment("a")
+    return run_experiment("a", resume_from_last_checkpoint=resume_from_last_checkpoint)
 
 
-def run_experiment_b():
+def run_experiment_b(resume_from_last_checkpoint=False):
     """Run Experiment B: PEFT + ICA masking fine-tuning (lesion mode)"""
-    return run_experiment("b")
+    return run_experiment("b", resume_from_last_checkpoint=resume_from_last_checkpoint)
 
 
-def run_experiment_c():
+def run_experiment_c(resume_from_last_checkpoint=False):
     """Run Experiment C: PEFT + ICA masking fine-tuning (preserve mode)"""
-    return run_experiment("c")
+    return run_experiment("c", resume_from_last_checkpoint=resume_from_last_checkpoint)
 
 
 def run_evaluation():
@@ -392,6 +430,11 @@ def main():
         help="Which experiment(s) to run (default: all)",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument(
+        "--resume_from_last_checkpoint",
+        action="store_true",
+        help="Resume each selected experiment from the latest checkpoint in its output_dir",
+    )
 
     args = parser.parse_args()
 
@@ -408,15 +451,21 @@ def main():
     # Run experiments based on selection
     if args.experiment in ["a", "all"]:
         logger.info("Running Experiment A...")
-        results["experiment_a"] = run_experiment_a()
+        results["experiment_a"] = run_experiment_a(
+            resume_from_last_checkpoint=args.resume_from_last_checkpoint
+        )
 
     if args.experiment in ["b", "all"]:
         logger.info("Running Experiment B...")
-        results["experiment_b"] = run_experiment_b()
+        results["experiment_b"] = run_experiment_b(
+            resume_from_last_checkpoint=args.resume_from_last_checkpoint
+        )
 
     if args.experiment in ["c", "all"]:
         logger.info("Running Experiment C...")
-        results["experiment_c"] = run_experiment_c()
+        results["experiment_c"] = run_experiment_c(
+            resume_from_last_checkpoint=args.resume_from_last_checkpoint
+        )
 
     # Run evaluation if selected set completed successfully
     if (

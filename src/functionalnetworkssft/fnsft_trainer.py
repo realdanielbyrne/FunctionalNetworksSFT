@@ -40,7 +40,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import torch
 from torch.utils.data import Dataset
-import transformers
 from transformers.utils.quantization_config import BitsAndBytesConfig
 from transformers.training_args import TrainingArguments
 from transformers.trainer import Trainer
@@ -541,36 +540,6 @@ def load_dataset_with_splits_from_args(
         dataset_name_or_path=data_args.dataset_name_or_path,
         dataset_config_name=data_args.dataset_config_name,
     )
-
-
-def log_training_mode_details(use_peft: bool, model: PreTrainedModel) -> None:
-    """Log detailed information about the training mode and its implications."""
-    logger.info("=" * 60)
-    logger.info("TRAINING MODE CONFIGURATION")
-    logger.info("=" * 60)
-
-    if use_peft:
-        logger.info("Training Mode: Parameter-Efficient Fine-Tuning (PEFT)")
-        logger.info("Adapter Configuration:")
-        if hasattr(model, "peft_config") and model.peft_config:
-            logger.info("   - PEFT adapters configured and active")
-            logger.info("   - Detailed LoRA configuration logged during model setup")
-        else:
-            logger.info("   - No PEFT configuration detected")
-    else:
-        logger.info("Training Mode: Full Parameter Fine-Tuning")
-
-    if torch.cuda.is_available():
-        try:
-            memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
-            memory_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
-            logger.info(f"GPU Memory Usage:")
-            logger.info(f"   - Allocated: {memory_allocated:.2f} GB")
-            logger.info(f"   - Reserved: {memory_reserved:.2f} GB")
-        except Exception as e:
-            logger.debug(f"Could not get GPU memory info: {e}")
-
-    logger.info("=" * 60)
 
 
 def adjust_training_args_for_mode(
@@ -1084,7 +1053,6 @@ def main(log_file=None):
     )
 
     args = parser.parse_args()
-    print(args.hub_token)
 
     # Load configuration from YAML if provided
     if args.config:
@@ -1179,17 +1147,6 @@ def main(log_file=None):
     is_quant = quant_args.use_4bit or quant_args.use_8bit
     is_qlora = is_peft and is_quant  # training via LoRA on quantized base
 
-    # Log LoRA configuration arguments
-    if is_peft:
-        logger.info("LoRA Configuration Arguments:")
-        logger.info(f"  - Use PEFT: {lora_args.use_peft}")
-        logger.info(f"  - LoRA Rank: {lora_args.lora_r}")
-        logger.info(f"  - LoRA Alpha: {lora_args.lora_alpha}")
-        logger.info(f"  - LoRA Dropout: {lora_args.lora_dropout}")
-        logger.info(f"  - LoRA Target Modules: {lora_args.lora_target_modules}")
-        logger.info(f"  - LoRA Bias: {lora_args.lora_bias}")
-        logger.info(f"  - Quantized Training (QLoRA): {is_qlora}")
-
     # Resolve target per user flag
     apply_to = args.anti_drift_apply_to
     if apply_to == "auto":
@@ -1233,11 +1190,9 @@ def main(log_file=None):
     if platform.system() == "Windows":
         # Use fewer workers on Windows to avoid paging file issues with CUDA libraries
         num_workers = 2
-        # logger.info("Using 2 DataLoader workers on Windows to avoid paging file issues")
     else:
         # Use more workers on Unix-like systems
         num_workers = 8
-        # logger.info("Using 8 DataLoader workers on Unix-like systems")
 
     logger.info(
         f"DataLoader pin_memory: {pin_memory_flag} | num_workers: {num_workers} | TF32 matmul: "
@@ -1317,9 +1272,6 @@ def main(log_file=None):
 
         # Setup LoRA or prepare for full fine-tuning
         model = setup_lora_from_args(model, lora_args)
-
-        # Log detailed training mode information
-        log_training_mode_details(lora_args.use_peft, model)
 
         # Adjust training arguments based on training mode
         training_args = adjust_training_args_for_mode(training_args, lora_args.use_peft)

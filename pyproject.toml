@@ -6,7 +6,7 @@ authors = [
     {name = "Daniel Byrne",email = "realdanielbyrne@icloud.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     # Core ML frameworks with cross-platform support
     # Note: PyTorch should be installed with platform-specific CUDA/CPU versions
@@ -18,7 +18,7 @@ dependencies = [
     # by selecting an appropriate extra (cuda, apple-silicon, cpu).
 
     # Hugging Face ecosystem
-    "transformers>=4.40.0,<5.0.0",  # Core transformers library
+    "transformers>=4.54.0,<5.0.0",  # Core transformers library
     "datasets>=2.18.0",             # Dataset loading and processing
     "tokenizers>=0.19.0",           # Fast tokenizers
     "accelerate>=0.30.0",           # Training acceleration

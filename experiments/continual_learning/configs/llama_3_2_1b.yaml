@@ -1,0 +1,58 @@
+# Continual Learning Evaluation Configuration
+# Model: LLaMA-3.2-1B-Instruct (smaller model for faster experimentation)
+
+model:
+  name: "llama-3.2-1b"
+  model_name: "meta-llama/Llama-3.2-1B-Instruct"
+  torch_dtype: "float16"
+  device_map: "auto"
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+
+training:
+  learning_rate: 1e-4
+  batch_size: 8
+  num_steps_per_task: 500
+  gradient_clip: 1.0
+  warmup_ratio: 0.1
+
+evaluation:
+  max_seq_length: 512
+  seed: 42
+
+# Task orders to run
+task_orders:
+  standard:
+    - "order_1"
+    - "order_2"
+    - "order_3"
+  long_chain:
+    - "order_4"
+    - "order_5"
+    - "order_6"
+
+# Methods to compare
+methods:
+  - "lora"       # Baseline (catastrophic forgetting)
+  - "ewc"        # Elastic Weight Consolidation
+  - "ica_networks"  # ICA-based functional networks
+
+# ICA-specific configuration
+ica:
+  components: 10
+  percentile: 98.0
+  mask_mode: "lesion"  # or "preserve"
+  template_path: null  # Path to precomputed templates
+
+output:
+  results_dir: "./experiments/continual_learning/results"
+  save_models: false
+

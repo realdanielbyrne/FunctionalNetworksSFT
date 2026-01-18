@@ -60,7 +60,7 @@ poetry run python scripts/setup_cuda.py
 # Install CUDA wheels explicitly (prevents CPU fallback)
 poetry run pip uninstall -y torch torchvision torchaudio
 poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-# Then install CUDA extras
+# Then install CUDA extras (Linux/Windows only)
 poetry install --extras cuda
 ```
 
@@ -99,6 +99,7 @@ poetry install --extras apple-silicon
 - ✅ Optimized for Apple Silicon architecture
 - ✅ Native ARM64 performance
 - ❌ Quantization not available (BitsAndBytes incompatible)
+ - ⚠ CUDA extras are skipped on macOS to avoid Linux-only dependencies (for example, `triton`)
 
 **Verify installation:**
 

@@ -8,7 +8,6 @@ source: "PDF extracted to Markdown"
 ---
 <!-- Page 1 / 19 -->
 
-
 # Dynamic Orthogonal Continual Fine-Tuning For Mitigating Catastrophic Forgettings
 
 Preprint. Under Review.
@@ -23,7 +22,7 @@ datasets. In this paper, we first reveal that the drift of functional directions
 the fine-tuning process is a key reason why existing regularization-based methods fail in long-term LLM continual learning. To address this, we propose Dynamic Orthogonal Continual (DOC) fine-tuning, a novel approach that tracks the
 drift of these functional directions and dynamically updates them during the finetuning process. Furthermore, by adjusting the gradients of new task parameters
 to be orthogonal to the tracked historical function directions, our method mitigates interference between new and old tasks. Extensive experiments on various LLM continual learning benchmarks demonstrate that this approach outperforms prior methods, effectively reducing catastrophic forgetting and providing a robust tool for continuous LLM fine-tuning. Our code is available at
-https://github.com/meloxxxxxx/DOC.
+<https://github.com/meloxxxxxx/DOC>.
 1
 INTRODUCTION
 Recently, Large Language Models (LLMs) have achieved significant milestones in various tasks
@@ -45,14 +44,12 @@ Step (2). Regularize new updates based on these historical functional directions
 For instance, Elastic Weight Consolidation (EWC) methods (Kirkpatrick et al., 2017; Zenke et al.,
 2017) and orthogonal optimization methods, including Orthogonal Gradient Descent (OGD) (Farajtabar et al., 2019) and Orthogonal Subspace Learning (O-LoRA) (Wang et al., 2023a), employ
 historical gradient directions and vectors in LoRA matrices of the model for regularization.
-∗Corresponce to Zeming Wei (weizeming@stu.pku.edu.cn) and Meng Sun (sunm@pku.edu.cn).
+∗Corresponce to Zeming Wei (<weizeming@stu.pku.edu.cn>) and Meng Sun (<sunm@pku.edu.cn>).
 1
 arXiv:2509.23893v1 [cs.LG] 28 Sep 2025
 
-
 ---
 <!-- Page 2 / 19 -->
-
 
 Preprint. Under Review.
 (a) Drifting functional directions
@@ -82,9 +79,11 @@ is in Figure 1(b).
 Extensive experiments verify the drift of functional directions and demonstrate the effectiveness
 of our method in tracking them, offering a substantiated motivation for our method. Furthermore,
 experiments on various LLM continual learning benchmarks demonstrate that our approach significantly mitigates the catastrophic forgetting issues in online streaming data scenarios, and outperforms prior methods, e.g., we respectively achieve an accuracy of 77.7 and 73.4 in standard CL
+
 ```text
 benchmark (Zhang et al., 2016) and long chains of tasks for LLaMA-7B (Touvron et al., 2023), compared to 76.5 and 71.9 of O-LoRA (Wang et al., 2023a), the previous state-of-the-art regularizationbased method. In summary, our contributions are as follows:
 ```
+
 - We reveal the drift of function directions in the fine-tuning process, which explains why
 regularization-based approaches fail in long-term LLM continual learning.
 - Based on this discovery, we propose the Dynamic Orthogonal Continual Fine-tuning
@@ -93,10 +92,8 @@ regularization-based approaches fail in long-term LLM continual learning.
 fine-tuning.
 2
 
-
 ---
 <!-- Page 3 / 19 -->
-
 
 Preprint. Under Review.
 2
@@ -162,10 +159,8 @@ Orthogonal Gradient Descent (OGD) (Farajtabar et al., 2019) and Orthogonal Subsp
 regularized functional directions. Elastic Weight Consolidation(EWC) methods (Kirkpatrick et al.,
 3
 
-
 ---
 <!-- Page 4 / 19 -->
-
 
 Preprint. Under Review.
 (a)
@@ -175,6 +170,7 @@ line shows cos⟨GT , G1⟩, where GT = ∇θL(FθT (x), y), θT is the model pa
 fine-tuning step.
 The yellow line shows cos⟨GT , ¯GT ⟩, where ¯GT
 =
+
 1
 T
 PT
@@ -229,10 +225,8 @@ different linear combinations of these bases. By extracting and updating the bas
 thus updating historical functional directions themselves.
 4
 
-
 ---
 <!-- Page 5 / 19 -->
-
 
 Preprint. Under Review.
 Tracking method overview. To achieve the conception above, we select the LoRA increment as
@@ -310,13 +304,13 @@ k = 1, 2, ..., K.
 (7)
 5
 
-
 ---
 <!-- Page 6 / 19 -->
 
-
 Preprint. Under Review.
+
 ### Algorithm 1 DOC (Our method)
+
 Input: Model Fθ, where θ = (A, B) includes LoRA A, B modules; learning rate α; the t-th incoming dataset Dt, expected maximum principal component number K for each new task
 Initialization: Principal components v1
 T , v2
@@ -417,15 +411,15 @@ Please note that the above orthogonal cut does not harm the gradient descent, as
 paper of OGD (Farajtabar et al., 2019). In summary, our complete method is formulated as Algorithm 1. Please refer to Figure 1(b) for a brief demonstration.
 6
 
-
 ---
 <!-- Page 7 / 19 -->
 
-
 Preprint. Under Review.
+
 ```text
 Table 1: Average Accuracy (AA) of different continual methods on LLaMA-7B.
 ```
+
 Standard CL Benchmark
 Long chain of tasks
 Order 1
@@ -529,9 +523,11 @@ ProgPrompt
 76.2
 77.1
 76.7
+
 ```text
 Table 2: Average Accuracy (AA) of different continual methods on LLaMA-13B.
 ```
+
 Standard CL Benchmark
 Long chain of tasks
 Order 1
@@ -678,15 +674,15 @@ the cost of a smaller decrease in FWT score, representing less damage to the fin
 task.
 7
 
-
 ---
 <!-- Page 8 / 19 -->
 
-
 Preprint. Under Review.
+
 ```text
 Table 3: Average BWT and FWT scores of different continual methods on LLaMA-7B
 ```
+
 Standard CL
 Long chain of
 Benchmark
@@ -743,13 +739,16 @@ the model with task-specific datasets sequentially using LoRA (Hu et al., 2021),
 baseline and the expected lower bound of continual learning. Note that other-based methods require
 additional settings and are not comparable to ours, which is detailed in Appendix D. Furthermore,
 we present the results from several other oracle methods that are not suitable for continuous finetuning settings, but they can serve as upper bounds:
+
 - Replay replay samples from historical tasks when fine-tuning on new tasks.
 - PerTaskLoRA train LoRA modules solely for each task.
 - MTL train the model on all tasks as multi-task learning.
 - ProgPrompt (Razdaibiedina et al., 2023) a state-of-the-art method that updates an extending prompt in the streaming data, but task ID is required during inference.
+
 ```text
 Table 4: Average Accuracy (AA) of different continual methods on T5-large
 ```
+
 Standard CL Benchmark
 Long chain of tasks
 Order 1
@@ -858,24 +857,28 @@ MAIN RESULTS
 Following ProgPrompt and O-LoRA, there are three independent runs with different task orders for
 different chains of tasks, as detailed in Appendix B.
 Overall performance. The results of Average Accuracy (AA) are shown in Table 1, Table 2, and
+
 ```text
 Table 4. We refer to the paper of O-LoRA (Wang et al., 2023a), the up-to-date regularization-based
 ```
+
 method, for the results of other approaches on T5-Large, as the settings and hyperparameters of our
+
 ```text
 experiments are equal. The results show that our method outperforms prior ones, especially in longchain tasks. We respectively achieve an accuracy of 77.4 and 73.0 in the standard CL benchmark
 ```
-8
 
+8
 
 ---
 <!-- Page 9 / 19 -->
 
-
 Preprint. Under Review.
+
 ```text
 Table 5: (a) Average clock time of one fine-tuning step; (b) Average Accuracy (AA) results of standard CL Benchmark on LLaMA-7B with different LoRA rank r and maximum principal component
 ```
+
 number K for each new task. The results are the average of task orders 1-3.
 (a)
 (b)
@@ -933,15 +936,19 @@ r = 16
 77.0
 r = 64
 76.8
+
 ```text
 and long chains of tasks for LLaMA-7B, compared to 75.8 and 69.6 for O-LoRA, the previous
 ```
+
 state-of-the-art regularization-based method.
 Mitigating Catastrophic Forgetting. The BWT and FWT results are shown in Table 3. The BWT
+
 ```text
 score of our method is higher than that of prior approaches. We reach -0.6 and -3.4 for standard
 and long continual learning tasks, compared to -1.9 and -5.2 of O-LoRA, indicating that our method
 ```
+
 suffers less from catastrophic forgetting. Our FWT score, compared to other methods, indicates that
 we mitigate catastrophic forgetting at a slight cost to fine-tuning performance.
 In summary, our method mitigates forgetting with a much higher BWT score, at the cost of a little fine-tuning performance with a slightly lower FWT score, eventually reaching effective overall
@@ -976,10 +983,8 @@ our tracking method and underscore its efficacy in enhancing continual learning 
 limitations and future directions, please refer to Appendix E and F.
 9
 
-
 ---
 <!-- Page 10 / 19 -->
-
 
 Preprint. Under Review.
 ETHICS STATEMENT
@@ -990,21 +995,21 @@ REPRODUCIBILITY STATEMENT
 Our code will be available upon publication. All datasets and LLMs we used in experiments are
 publicly available online.
 REFERENCES
-Armen Aghajanyan, Luke Zettlemoyer, and Sonal Gupta. Intrinsic dimensionality explains the effectiveness of language model fine-tuning, 2020. URL https://arxiv.org/abs/2012.
+Armen Aghajanyan, Luke Zettlemoyer, and Sonal Gupta. Intrinsic dimensionality explains the effectiveness of language model fine-tuning, 2020. URL <https://arxiv.org/abs/2012>.
 13255.
 Raman Arora, Andrew Cotter, Karen Livescu, and Nathan Srebro. Stochastic optimization for pca
 and pls. In 2012 50th Annual Allerton Conference on Communication, Control, and Computing
 (Allerton), pp. 861–868, 2012. doi: 10.1109/Allerton.2012.6483308.
 Sid Black, Lee Sharkey, Leo Grinsztajn, Eric Winsor, Dan Braun, Jacob Merizian, Kip Parker,
 Carlos Ram´on Guevara, Beren Millidge, Gabriel Alfour, and Connor Leahy. Interpreting neural
-networks through the polytope lens, 2022. URL https://arxiv.org/abs/2211.12312.
+networks through the polytope lens, 2022. URL <https://arxiv.org/abs/2211.12312>.
 Herv´e Cardot and David Degras. Online principal component analysis in high dimension: Which
-algorithm to choose?, 2015. URL https://arxiv.org/abs/1511.03688.
+algorithm to choose?, 2015. URL <https://arxiv.org/abs/1511.03688>.
 Cyprien de Masson d’Autume, Sebastian Ruder, Lingpeng Kong, and Dani Yogatama. Episodic
 memory in lifelong language learning, 2019.
-URL https://arxiv.org/abs/1906.
+URL <https://arxiv.org/abs/1906>.
 01076.
-Mehrdad Farajtabar, Navid Azizan, Alex Mott, and Ang Li. Orthogonal gradient descent for continual learning, 2019. URL https://arxiv.org/abs/1910.07104.
+Mehrdad Farajtabar, Navid Azizan, Alex Mott, and Ang Li. Orthogonal gradient descent for continual learning, 2019. URL <https://arxiv.org/abs/1910.07104>.
 Dan Hendrycks, Collin Burns, Steven Basart, Andrew Critch, Jerry Li, Dawn Song, and Jacob
 Steinhardt. Aligning ai with shared human values. Proceedings of the International Conference
 on Learning Representations (ICLR), 2021a.
@@ -1018,7 +1023,7 @@ text classification with information disentanglement based regularization, 2021.
 //arxiv.org/abs/2104.05489.
 Joel Jang, Seungone Kim, Seonghyeon Ye, Doyoung Kim, Lajanugen Logeswaran, Moontae Lee,
 Kyungjae Lee, and Minjoon Seo. Exploring the benefits of training expert language models over
-instruction tuning, 2023. URL https://arxiv.org/abs/2302.03202.
+instruction tuning, 2023. URL <https://arxiv.org/abs/2302.03202>.
 James Kirkpatrick, Razvan Pascanu, Neil Rabinowitz, Joel Veness, Guillaume Desjardins, Andrei A. Rusu, Kieran Milan, John Quan, Tiago Ramalho, Agnieszka Grabska-Barwinska, Demis
 Hassabis, Claudia Clopath, Dharshan Kumaran, and Raia Hadsell.
 Overcoming catastrophic
@@ -1031,17 +1036,15 @@ URL http:
 //dx.doi.org/10.1073/pnas.1611835114.
 10
 
-
 ---
 <!-- Page 11 / 19 -->
-
 
 Preprint. Under Review.
 T. P. Krasulina. Method of stochastic approximation in the determination of the largest eigenvalue of
 the mathematical expectation of random matrices. Automation and Remote Control, pp. 215–221,
 1970. Originally published in Avtomatika i Telemekhanika, 1970, no. 2, pp. 50–56.
 A. Levey and M. Lindenbaum. Sequential karhunen-loeve basis extraction and its application to images. IEEE Transactions on Image Processing, 9(8):1371–1374, 2000. doi: 10.1109/83.855432.
-Zhizhong Li and Derek Hoiem. Learning without forgetting, 2017. URL https://arxiv.org/
+Zhizhong Li and Derek Hoiem. Learning without forgetting, 2017. URL <https://arxiv.org/>
 abs/1606.09282.
 Andrew L. Maas, Raymond E. Daly, Peter T. Pham, Dan Huang, Andrew Y. Ng, and Christopher
 Potts.
@@ -1049,21 +1052,21 @@ Learning word vectors for sentiment analysis.
 In Dekang Lin, Yuji Matsumoto, and
 Rada Mihalcea (eds.), Proceedings of the 49th Annual Meeting of the Association for Computational Linguistics: Human Language Technologies, pp. 142–150, Portland, Oregon, USA, June
 2011. Association for Computational Linguistics.
-URL https://aclanthology.org/
+URL <https://aclanthology.org/>
 P11-1015/.
 Eric J. Michaud, Ziming Liu, Uzay Girit, and Max Tegmark. The quantization model of neural
-scaling, 2024. URL https://arxiv.org/abs/2303.13506.
+scaling, 2024. URL <https://arxiv.org/abs/2303.13506>.
 Jisoo Mok, Jaeyoung Do, Sungjin Lee, Tara Taghavi, Seunghak Yu, and Sungroh Yoon. Large-scale
 lifelong learning of in-context instructions and how to tackle it. In Anna Rogers, Jordan BoydGraber, and Naoaki Okazaki (eds.), Proceedings of the 61st Annual Meeting of the Association for
 Computational Linguistics (Volume 1: Long Papers), pp. 12573–12589, Toronto, Canada, July
 2023. Association for Computational Linguistics. doi: 10.18653/v1/2023.acl-long.703. URL
-https://aclanthology.org/2023.acl-long.703/.
+<https://aclanthology.org/2023.acl-long.703/>.
 Erkki Oja. Principal components, minor components, and linear neural networks. Neural Networks, 5(6):927–935, 1992.
 ISSN 0893-6080.
-doi: https://doi.org/10.1016/S0893-6080(05)
+doi: <https://doi.org/10.1016/S0893-6080(05)>
 80089-9.
 URL
-https://www.sciencedirect.com/science/article/pii/
+<https://www.sciencedirect.com/science/article/pii/>
 S0893608005800899.
 Erkki Oja and Juha Karhunen.
 On stochastic approximation of the eigenvectors and
@@ -1071,27 +1074,27 @@ eigenvalues of the expectation of a random matrix.
 Journal of Mathematical Analysis and Applications, 106(1):69–84, 1985.
 ISSN 0022-247X.
 doi:
-https://doi.org/10.
+<https://doi.org/10>.
 1016/0022-247X(85)90131-3.
-URL https://www.sciencedirect.com/science/
+URL <https://www.sciencedirect.com/science/>
 article/pii/0022247X85901313.
 Chris Olah, Arvind Satyanarayan, Ian Johnson, Shan Carter, Ludwig Schubert, Katherine Ye, and
 Alexander Mordvintsev. The building blocks of interpretability. Distill, 2018. doi: 10.23915/
-distill.00010. https://distill.pub/2018/building-blocks.
+distill.00010. <https://distill.pub/2018/building-blocks>.
 Chris Olah, Nick Cammarata, Ludwig Schubert, Gabriel Goh, Michael Petrov, and Shan Carter.
 Zoom in:
 An introduction to circuits.
 Distill, 2020.
 doi:
 10.23915/distill.00024.001.
-https://distill.pub/2020/circuits/zoom-in.
+<https://distill.pub/2020/circuits/zoom-in>.
 Bohao Peng, Zhuotao Tian, Shu Liu, Mingchang Yang, and Jiaya Jia. Scalable language model with
-generalized continual learning, 2024. URL https://arxiv.org/abs/2404.07470.
+generalized continual learning, 2024. URL <https://arxiv.org/abs/2404.07470>.
 Chengwei Qin and Shafiq Joty. Lfpt5: A unified framework for lifelong few-shot language learning
-based on prompt tuning of t5, 2022. URL https://arxiv.org/abs/2110.07298.
+based on prompt tuning of t5, 2022. URL <https://arxiv.org/abs/2110.07298>.
 Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi
 Zhou, Wei Li, and Peter J. Liu. Exploring the limits of transfer learning with a unified text-to-text
-transformer, 2023. URL https://arxiv.org/abs/1910.10683.
+transformer, 2023. URL <https://arxiv.org/abs/1910.10683>.
 Anastasia Razdaibiedina, Yuning Mao, Rui Hou, Madian Khabsa, Mike Lewis, and Amjad Almahairi.
 Progressive prompts: Continual learning for language models, 2023.
 URL https:
@@ -1100,37 +1103,35 @@ Terence D. Sanger.
 Optimal unsupervised learning in a single-layer linear feedforward neural network.
 Neural Networks, 2(6):459–473, 1989.
 ISSN 0893-6080.
-doi: https://doi.org/
-10.1016/0893-6080(89)90044-0. URL https://www.sciencedirect.com/science/
+doi: <https://doi.org/>
+10.1016/0893-6080(89)90044-0. URL <https://www.sciencedirect.com/science/>
 article/pii/0893608089900440.
 11
-
 
 ---
 <!-- Page 12 / 19 -->
 
-
 Preprint. Under Review.
-Shreya Saxena and John P Cunningham. Towards the neural population doctrine. Current Opinion in Neurobiology, 55:103–111, 2019. ISSN 0959-4388. doi: https://doi.org/10.1016/j.conb.
+Shreya Saxena and John P Cunningham. Towards the neural population doctrine. Current Opinion in Neurobiology, 55:103–111, 2019. ISSN 0959-4388. doi: <https://doi.org/10.1016/j.conb>.
 2019.02.002.
-URL https://www.sciencedirect.com/science/article/pii/
+URL <https://www.sciencedirect.com/science/article/pii/>
 S0959438818300990. Machine Learning, Big Data, and Neuroscience.
 Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li, Carlos Guestrin, Percy
 Liang, and Tatsunori B. Hashimoto. Stanford alpaca: An instruction-following llama model.
-https://github.com/tatsu-lab/stanford_alpaca, 2023.
+<https://github.com/tatsu-lab/stanford_alpaca>, 2023.
 Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, et al. Llama 2: Open foundation and fine-tuned chat models. arXiv preprint arXiv:2307.09288, 2023.
 Alex Wang, Amanpreet Singh, Julian Michael, Felix Hill, Omer Levy, and Samuel R. Bowman.
 Glue: A multi-task benchmark and analysis platform for natural language understanding, 2019.
-URL https://arxiv.org/abs/1804.07461.
+URL <https://arxiv.org/abs/1804.07461>.
 Alex Wang, Yada Pruksachatkun, Nikita Nangia, Amanpreet Singh, Julian Michael, Felix Hill, Omer
 Levy, and Samuel R. Bowman. Superglue: A stickier benchmark for general-purpose language
-understanding systems, 2020. URL https://arxiv.org/abs/1905.00537.
+understanding systems, 2020. URL <https://arxiv.org/abs/1905.00537>.
 Mingyang Wang, Heike Adel, Lukas Lange, Jannik Str¨otgen, and Hinrich Sch¨utze.
 Rehearsalfree modular and compositional continual learning for language models, 2024. URL https:
 //arxiv.org/abs/2404.00790.
 Xiao Wang, Tianze Chen, Qiming Ge, Han Xia, Rong Bao, Rui Zheng, Qi Zhang, Tao Gui, and
 Xuanjing Huang. Orthogonal subspace learning for language model continual learning, 2023a.
-URL https://arxiv.org/abs/2310.14152.
+URL <https://arxiv.org/abs/2310.14152>.
 Zhicheng Wang, Yufang Liu, Tao Ji, Xiaoling Wang, Yuanbin Wu, Congcong Jiang, Ye Chao,
 Zhencong Han, Ling Wang, Xu Shao, and Wenqiu Zeng.
 Rehearsal-free continual language
@@ -1142,40 +1143,36 @@ doi: 10.18653/v1/2023.acl-long.612.
 URL https:
 //aclanthology.org/2023.acl-long.612/.
 Zifeng Wang, Zizhao Zhang, Chen-Yu Lee, Han Zhang, Ruoxi Sun, Xiaoqi Ren, Guolong Su, Vincent Perot, Jennifer Dy, and Tomas Pfister. Learning to prompt for continual learning, 2022. URL
-https://arxiv.org/abs/2112.08654.
+<https://arxiv.org/abs/2112.08654>.
 Juyang Weng, Yilu Zhang, and Wey-Shiuan Hwang. Candid covariance-free incremental principal
 component analysis. IEEE Transactions on Pattern Analysis and Machine Intelligence, 25(8):
 1034–1040, 2003. doi: 10.1109/TPAMI.2003.1217609.
 Chengyue Wu, Yukang Gan, Yixiao Ge, Zeyu Lu, Jiahao Wang, Ye Feng, Ying Shan, and Ping Luo.
-Llama pro: Progressive llama with block expansion, 2024a. URL https://arxiv.org/
+Llama pro: Progressive llama with block expansion, 2024a. URL <https://arxiv.org/>
 abs/2401.02415.
 Tongtong Wu, Massimo Caccia, Zhuang Li, Yuan-Fang Li, Guilin Qi, and Gholamreza Haffari.
-Pretrained language model in continual learning: A comparative study. In International Conference on Learning Representations, 2022. URL https://openreview.net/forum?id=
+Pretrained language model in continual learning: A comparative study. In International Conference on Learning Representations, 2022. URL <https://openreview.net/forum?id=>
 figzpGMrdD.
 Tongtong Wu, Linhao Luo, Yuan-Fang Li, Shirui Pan, Thuy-Trang Vu, and Gholamreza Haffari.
-Continual learning for large language models: A survey, 2024b. URL https://arxiv.org/
+Continual learning for large language models: A survey, 2024b. URL <https://arxiv.org/>
 abs/2402.01364.
 Friedemann Zenke, Ben Poole, and Surya Ganguli. Continual learning through synaptic intelligence,
-2017. URL https://arxiv.org/abs/1703.04200.
-Xiang Zhang, Junbo Zhao, and Yann LeCun. Character-level convolutional networks for text classification, 2016. URL https://arxiv.org/abs/1509.01626.
+2017. URL <https://arxiv.org/abs/1703.04200>.
+Xiang Zhang, Junbo Zhao, and Yann LeCun. Character-level convolutional networks for text classification, 2016. URL <https://arxiv.org/abs/1509.01626>.
 12
-
 
 ---
 <!-- Page 13 / 19 -->
-
 
 Preprint. Under Review.
 Yilu Zhang and Juyang Weng. Convergence analysis of complementary candid incremental principal
 component analysis. 2001.
 Junhao Zheng, Shengjie Qiu, Chengming Shi, and Qianli Ma. Towards lifelong learning of large
-language models: A survey, 2024. URL https://arxiv.org/abs/2406.06391.
+language models: A survey, 2024. URL <https://arxiv.org/abs/2406.06391>.
 13
-
 
 ---
 <!-- Page 14 / 19 -->
-
 
 Preprint. Under Review.
 A
@@ -1254,7 +1251,9 @@ T ∥,
 where η =
 T −l
 T +1 · (1 −ϵ). Note that the convergence of equation (20) is disturbed for tracking.
+
 ### Algorithm 2 summarizes the modified tracking CCIPCA method, which additionally employs a
+
 residual threshold δ ∈(0, 1) to append new components automatically (lines 7-10).
 An example of functional direction tracking. We present the following example on the working
 process of functional direction tracking as a reference for Algorithm 2. Still, we take fine-tuning
@@ -1272,13 +1271,13 @@ et al., 2003). The empirical value of the tracking factor is that ϵ ∈(0, 0.1)
 increase and decrease of the residual rate, and the residual threshold δ = 0.1 for adding components
 14
 
-
 ---
 <!-- Page 15 / 19 -->
 
-
 Preprint. Under Review.
+
 ### Algorithm 2 Online PCA for Tracking Functional Directions
+
 Parameter: Maximum principal component number Kmax, amnesic factor l, tracking factor ϵ,
 residual threshold δ
 Initialization: current principal component number n = 0
@@ -1328,21 +1327,22 @@ Prompts for different tasks. Table 8 shows prompts for different tasks. NLI deno
 Yelp, SST-2, IMDB. TC denotes topic classification, including AG News, DBpedia, Yahoo.
 15
 
-
 ---
 <!-- Page 16 / 19 -->
 
-
 Preprint. Under Review.
+
 ```text
 Table 6: The details of 15 datasets used in the CL experiments, following O-LoRA and Progressive
 ```
+
 Prompt. NLI denotes natural language inference, QA denotes the question and answer task.
 Dataset name
 Category
 Task
 Domain
 Metric
+
 1. Yelp
 CL Benchmark
 sentiment analysis
@@ -1418,9 +1418,11 @@ SuperGLUE
 sentiment analysis
 movie reviews
 accuracy
+
 ```text
 Table 7: Different orders of task sequences used for continual learning experiments. Orders 1-3
 ```
+
 correspond to the standard CL benchmark, orders 4-6 are long chain of tasks, following O-LoRA
 and Progressive Prompt.
 Order
@@ -1467,15 +1469,15 @@ effect of other normalization methods designed for LoRA increments or gradients 
 investigation.
 16
 
-
 ---
 <!-- Page 17 / 19 -->
 
-
 Preprint. Under Review.
+
 ```text
 Table 8: Instructions for different tasks, following O-LoRA and Progressive Prompt.
 ```
+
 Task
 Prompts
 NLI
@@ -1538,15 +1540,15 @@ t is the i th colomun vector of Bm×r matrix fine-tuned in the t th task, that i
 (β1, β2, ..., βr).
 17
 
-
 ---
 <!-- Page 18 / 19 -->
 
-
 Preprint. Under Review.
+
 ```text
 Table 9: The accuracy on the MMLU benchmark of LLaMA-7B before and after continual learning
 ```
+
 (CL) on the CL benchmark. The results are the average of task orders 1-3. Note that with MMLU
 being a four-classification problem, a 25% accuracy equates to random guessing.
 MMLU Accuracy
@@ -1564,9 +1566,11 @@ O-LoRA throughout Alpaca and CL
 32.1
 DOC throughout Alpaca and CL
 34.6
+
 ```text
 Table 10: The comparison of continual learning methods. Specifically, RF indicates whether the
 ```
+
 method is rehearsal-free. TIF indicates whether the task ID is free during inference. Compared to
 regularization-based methods, other methods have extra settings or computational overheads.
 RF
@@ -1637,28 +1641,30 @@ benchmark (Zhang et al., 2016), we test the model on the MMLU benchmark (Hendryc
 model, SeqLoRA and our method (DOC) suffer from forgetting (accuracy respectively drops from
 18
 
-
 ---
 <!-- Page 19 / 19 -->
-
 
 Preprint. Under Review.
 **Figure 4: The expansion of principal components in the first 2 tasks. Note that we do not limit the**
 maximum principal component number in this experiment, i.e., Kmax = +∞. As the number of
 principal components increases, it reaches a point where no extra component is required, indicating
 that the current components are adequate to cover a large enough part of the LoRA increment.
+
 ```text
 36.0 to 26.2 and 29.4). This is because of the lack of information about unseen tasks during continual
 ```
+
 learning. In the experimental settings, the issues above limit the practicality of DOC.
 Note that we fine-tune the model on Alpaca at the beginning, so that continual learning also triggers the forgetting of Alpaca. What if we mitigate this forgetting with CL methods? We further
 investigate the effect of continual fine-tuning the model on the Alpaca and CL benchmark with CL
 methods applied throughout from start to end, which makes the Alpaca visible to the methods.
 Note that MMLU is still unseen during the continual fine-tuning process in this setting. The results
+
 ```text
 show the enhanced performance (an accuracy of 34.6 for DOC and 32.1 for O-LoRA, compared to
 29.4 and 30.1 in the former experiment where Alpaca is invisible to the methods). An explanation is
 ```
+
 that the methods avoid forgetting Alpaca, which is a general dataset that assists in the initialization
 of crucial functional directions of the model, thus aiding in the preservation of crucial functions for
 unseen tasks. The results also indicate that the generalization of our method, which preserves the

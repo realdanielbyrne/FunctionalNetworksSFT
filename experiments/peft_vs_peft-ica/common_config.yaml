@@ -25,7 +25,7 @@ validation_split: 0.1  # 10% for validation
 
 # Dataset preprocessing parameters
 response_max_length: 10000     # Maximum response field length
-instruction_max_length: 5000  # Maximum combined instruction length (including context)
+instruction_max_length: 10000  # Maximum combined instruction length (including context)
 
 # PEFT Configuration (LoRA)
 lora_r: 16              # LoRA rank
@@ -44,7 +44,7 @@ warmup_ratio: 0.05
 lr_scheduler_type: "cosine"
 
 # Sequence and Template Configuration
-max_seq_length: 4196
+max_seq_length: 10000
 template_format: "auto"  # Auto-detect chat template
 
 # Evaluation and Logging

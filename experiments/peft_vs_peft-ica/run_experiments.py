@@ -58,29 +58,29 @@ EXPERIMENT_A_OVERRIDES = {
 # Experiment B: PEFT + ICA masking (lesion mode)
 EXPERIMENT_B_OVERRIDES = {
     "output_dir": "experiments/peft_vs_peft-ica/experiment_b_peft_ica/output",
-    "wandb_project": "VibeThinker-1.5B-Physics-Fnsft-PEFT+ICA-Lesion",
+    "wandb_project": "VibeThinker-1.5B-Physics-Fnsft-PEFT+ICA-Lesion_10Components",
     "hub_repo_id": "realdanielbyrne/VibeThinker-1.5B-Instruct-Physics-PEFT+ICA-Lesion",
-    "hub_commit_message": "1 Epoch Physics, Components [0,1], Lesion",
+    "hub_commit_message": "1 Epoch Physics, Components [0,1,2,3,4,5,6,7,8,9], Lesion",
     "mask_mode": "lesion",
     "lora_target_modules": ["down_proj"],
     "ica_template_path": "ica_templates/vibethinker-1.5B/camel-ai_physics/global_templates.json",
-    "ica_components": 5,
+    "ica_components": 10,
     "ica_percentile": 98.0,
-    "ica_component_ids": [0, 1],
+    "ica_component_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
 }
 
 # Experiment C: PEFT + ICA masking (preserve mode)
 EXPERIMENT_C_OVERRIDES = {
     "output_dir": "experiments/peft_vs_peft-ica/experiment_c_peft_ica_preserve/output",
-    "wandb_project": "VibeThinker1.5B-Physics-PEFT+ICA-Preserve",
+    "wandb_project": "VibeThinker1.5B-Physics-PEFT+ICA-Preserve_10Components",
     "hub_repo_id": "realdanielbyrne/VibeThinker-1.5B-Physics-Fnsft-PEFT+ICA-Preserve",
-    "hub_commit_message": "1 Epoch, Physics, Components [0,1] preserved",
+    "hub_commit_message": "1 Epoch Physics, Components [0,1,2,3,4,5,6,7,8,9], Preserve",
     "mask_mode": "preserve",
     "lora_target_modules": ["down_proj"],
     "ica_template_path": "ica_templates/vibethinker-1.5B/camel-ai_physics/global_templates.json",
-    "ica_components": 5,
+    "ica_components": 10,
     "ica_percentile": 98.0,
-    "ica_component_ids": [0, 1],
+    "ica_component_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
 }
 
 # Map experiment names to their overrides

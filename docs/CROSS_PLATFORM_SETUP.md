@@ -48,7 +48,7 @@ This installs the core dependencies that work across all platforms.
 poetry run pip uninstall torch torchvision torchaudio -y
 poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-# Install CUDA-specific dependencies
+# Install CUDA-specific dependencies (Linux/Windows only)
 poetry install --extras cuda
 ```
 
@@ -80,6 +80,7 @@ poetry install --extras apple-silicon
 - ✅ Mixed precision training (fp16)
 - ❌ BitsAndBytes quantization (not supported)
 - ❌ Flash Attention (not supported)
+ - ⚠ CUDA extras are gated to Linux/Windows to avoid Linux-only dependencies (for example, `triton`)
 
 **Note:** Quantization is automatically disabled on Apple Silicon. The system will use full precision or fp16 instead.
 

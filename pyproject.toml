@@ -35,6 +35,8 @@ dependencies = [
     "scipy>=1.10.0",                # Scientific computing
     "scikit-learn>=1.3.0",          # Machine learning utilities (for ICA)
     "safetensors>=0.4.0",           # Safe tensor serialization
+    "pandas>=2.0.0",                # Data analysis (for CL evaluation)
+    "tabulate>=0.9.0",              # Table formatting (for CL results)
 
     # Development and testing 
     "pytest>=7.0.0",               # Testing framework
@@ -55,6 +57,10 @@ fnsft = "functionalnetworkssft.fnsft_trainer:main"
 check-hf-token = "functionalnetworkssft.utils.hf_utilities:main"
 buildtemplates = "functionalnetworkssft.build_ica_templates:main"
 convert-gguf = "functionalnetworkssft.cli_gguf:main"
+fnsft-cl-eval = "functionalnetworkssft.continual_learning.evaluation:main"
+fnsft-cl-tables = "functionalnetworkssft.continual_learning.utils:generate_tables_cli"
+fnsft-cl-orchestrate = "functionalnetworkssft.continual_learning.orchestrator:main"
+fnsft-cl-aggregate = "functionalnetworkssft.continual_learning.aggregation:main"
 
 [project.optional-dependencies]
 
@@ -69,8 +75,8 @@ dev = [
 # Platform-specific extras (no torch/torchvision/torchaudio here)
 # CUDA systems: install CUDA wheels via scripts/setup_cuda.py first
 cuda = [
-    "bitsandbytes>=0.43.0",
-    "flash-attn>=2.5.0",
+    "bitsandbytes>=0.43.0; (platform_system == \"Linux\" or platform_system == \"Windows\")",
+    "flash-attn>=2.5.0; platform_system == \"Linux\" and platform_machine == \"x86_64\"",
 ]
 
 # Apple Silicon: install PyTorch from PyPI (includes MPS support)

@@ -182,6 +182,26 @@ class OLoRA(ContinualLearningMethod):
         """Return the model for inference."""
         return self.model
 
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Return O-LoRA state: subspace bases per parameter per task."""
+        state = super().get_state_dict()
+        state["ortho_lambda"] = self.ortho_lambda
+        state["subspace_dim"] = self.subspace_dim
+        state["lora_param_names"] = self.lora_param_names
+        state["task_subspaces"] = {
+            name: [b.cpu() for b in bases]
+            for name, bases in self.task_subspaces.items()
+        }
+        return state
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore O-LoRA state from checkpoint."""
+        super().load_state_dict(state)
+        self.ortho_lambda = state.get("ortho_lambda", self.ortho_lambda)
+        self.subspace_dim = state.get("subspace_dim", self.subspace_dim)
+        if "task_subspaces" in state:
+            self.task_subspaces = state["task_subspaces"]
+
     def save_state(self, path: str) -> None:
         """Save O-LoRA state including subspaces."""
         import json

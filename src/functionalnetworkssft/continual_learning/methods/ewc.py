@@ -4,7 +4,7 @@ Kirkpatrick et al., 2017
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import torch
 from torch import nn
@@ -129,4 +129,25 @@ class EWC(ContinualLearningMethod):
 
         self.model.train()
         return fisher
+
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Return EWC state: Fisher matrices and optimal parameters."""
+        state = super().get_state_dict()
+        state["ewc_lambda"] = self.ewc_lambda
+        state["fisher_matrices"] = {
+            k: {name: t.cpu() for name, t in v.items()}
+            for k, v in self.fisher_matrices.items()
+        }
+        state["optimal_params"] = {
+            k: {name: t.cpu() for name, t in v.items()}
+            for k, v in self.optimal_params.items()
+        }
+        return state
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore EWC state from checkpoint."""
+        super().load_state_dict(state)
+        self.ewc_lambda = state.get("ewc_lambda", self.ewc_lambda)
+        self.fisher_matrices = state.get("fisher_matrices", {})
+        self.optimal_params = state.get("optimal_params", {})
 

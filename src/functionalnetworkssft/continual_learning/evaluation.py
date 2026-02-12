@@ -229,6 +229,57 @@ def train_on_task(
     pbar.close()
 
 
+def run_single_task_cycle(
+    T: int,
+    task_order: List[str],
+    cl_method: ContinualLearningMethod,
+    dataset_loader: CLDatasetLoader,
+    tokenizer,
+    config: Dict,
+    metrics: ContinualLearningMetrics,
+    device: str = "cuda",
+) -> None:
+    """Train on task T and evaluate all tasks 0..T.
+
+    This is the core task cycle extracted for reuse by the orchestrator.
+    It handles before_task, training, after_task, and evaluation.
+
+    Args:
+        T: Index of the current task in the task order (0-indexed).
+        task_order: List of task names in sequence.
+        cl_method: The continual learning method instance.
+        dataset_loader: Dataset loader with caching.
+        tokenizer: Model tokenizer for evaluation.
+        config: Model/training configuration dict.
+        metrics: ContinualLearningMetrics to record accuracy into.
+        device: Device for tensors.
+    """
+    num_tasks = len(task_order)
+    task_name = task_order[T]
+    logger.info(f"\nTask {T + 1}/{num_tasks}: {task_name}")
+
+    task_data = dataset_loader.load_dataset(task_name)
+    cl_method.before_task(T, task_name, task_data)
+    train_on_task(cl_method, task_data["train"], config, device)
+    cl_method.after_task(T, task_name, task_data)
+
+    eval_model = cl_method.get_model_for_inference()
+    logger.info(f"Evaluating on tasks 1-{T + 1}...")
+
+    for t in range(T + 1):
+        eval_task = task_order[t]
+        eval_data = dataset_loader.load_dataset(eval_task)
+        accuracy = evaluate_task(
+            eval_model, tokenizer, eval_task, eval_data["test"], device
+        )
+        metrics.record_accuracy(t, T, accuracy)
+        logger.info(f"  Task {t + 1} ({eval_task}): {accuracy:.2f}%")
+
+    logger.info(f"Current AA: {metrics.compute_average_accuracy(T + 1):.2f}%")
+    if T > 0:
+        logger.info(f"Current BWT: {metrics.compute_backward_transfer(T + 1):.2f}")
+
+
 def compute_baseline_accuracies(
     model_key: str,
     task_order: List[str],
@@ -329,29 +380,11 @@ def run_continual_learning_evaluation(
             metrics.set_baseline_accuracy(t, acc)
         logger.info("Baseline computation complete.")
 
-    for T, task_name in enumerate(task_order):
-        logger.info(f"\nTask {T + 1}/{num_tasks}: {task_name}")
-
-        task_data = dataset_loader.load_dataset(task_name)
-        cl_method.before_task(T, task_name, task_data)
-        train_on_task(cl_method, task_data["train"], config, device)
-        cl_method.after_task(T, task_name, task_data)
-
-        eval_model = cl_method.get_model_for_inference()
-        logger.info(f"Evaluating on tasks 1-{T + 1}...")
-
-        for t in range(T + 1):
-            eval_task = task_order[t]
-            eval_data = dataset_loader.load_dataset(eval_task)
-            accuracy = evaluate_task(
-                eval_model, tokenizer, eval_task, eval_data["test"], device
-            )
-            metrics.record_accuracy(t, T, accuracy)
-            logger.info(f"  Task {t + 1} ({eval_task}): {accuracy:.2f}%")
-
-        logger.info(f"Current AA: {metrics.compute_average_accuracy(T + 1):.2f}%")
-        if T > 0:
-            logger.info(f"Current BWT: {metrics.compute_backward_transfer(T + 1):.2f}")
+    for T in range(num_tasks):
+        run_single_task_cycle(
+            T, task_order, cl_method, dataset_loader,
+            tokenizer, config, metrics, device,
+        )
 
     results = metrics.get_full_report()
     results.update(

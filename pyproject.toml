@@ -59,6 +59,8 @@ buildtemplates = "functionalnetworkssft.build_ica_templates:main"
 convert-gguf = "functionalnetworkssft.cli_gguf:main"
 fnsft-cl-eval = "functionalnetworkssft.continual_learning.evaluation:main"
 fnsft-cl-tables = "functionalnetworkssft.continual_learning.utils:generate_tables_cli"
+fnsft-cl-orchestrate = "functionalnetworkssft.continual_learning.orchestrator:main"
+fnsft-cl-aggregate = "functionalnetworkssft.continual_learning.aggregation:main"
 
 [project.optional-dependencies]
 

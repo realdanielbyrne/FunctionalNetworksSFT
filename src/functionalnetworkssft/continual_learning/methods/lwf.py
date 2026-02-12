@@ -150,3 +150,21 @@ class LwF(ContinualLearningMethod):
     def get_model_for_inference(self) -> nn.Module:
         """Return the current model for inference."""
         return self.model
+
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Return LwF state. Note: old_model is reconstructed on resume via before_task."""
+        state = super().get_state_dict()
+        state["lwf_alpha"] = self.lwf_alpha
+        state["temperature"] = self.temperature
+        state["has_old_model"] = self.old_model is not None
+        return state
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore LwF state. The old_model will be re-created from the
+        current model weights (which are loaded from checkpoint)."""
+        super().load_state_dict(state)
+        self.lwf_alpha = state.get("lwf_alpha", self.lwf_alpha)
+        self.temperature = state.get("temperature", self.temperature)
+        # Re-create old_model from current model weights if it existed
+        if state.get("has_old_model", False):
+            self._store_old_model()

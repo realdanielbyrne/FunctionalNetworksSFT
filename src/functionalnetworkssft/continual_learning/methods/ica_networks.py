@@ -158,6 +158,29 @@ class ICANetworksCL(ContinualLearningMethod):
             self.ica_mask.mask_handles = []
         return self.model
 
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Return ICA Networks state for checkpointing."""
+        state = super().get_state_dict()
+        state["task_protected_components"] = {
+            str(k): v for k, v in self.task_protected_components.items()
+        }
+        state["ica_components"] = self.ica_components
+        state["ica_percentile"] = self.ica_percentile
+        state["mask_mode"] = self.mask_mode
+        state["ica_template_path"] = self.ica_template_path
+        return state
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore ICA Networks state from checkpoint."""
+        super().load_state_dict(state)
+        self.task_protected_components = {
+            int(k): v
+            for k, v in state.get("task_protected_components", {}).items()
+        }
+        self.ica_components = state.get("ica_components", self.ica_components)
+        self.ica_percentile = state.get("ica_percentile", self.ica_percentile)
+        self.mask_mode = state.get("mask_mode", self.mask_mode)
+
     def save_state(self, path: str) -> None:
         """Save ICA state and protected components."""
         state = {

@@ -95,6 +95,26 @@ class ContinualLearningMethod(ABC):
         """Get list of trainable parameters."""
         return [p for p in self.model.parameters() if p.requires_grad]
 
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Return serializable state for checkpointing.
+
+        Subclasses should override to include method-specific state
+        (Fisher matrices, subspace bases, etc.) and call super().
+        """
+        return {
+            "task_history": self.task_history,
+            "current_task_idx": self.current_task_idx,
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore state from checkpoint.
+
+        Subclasses should override to restore method-specific state
+        and call super().
+        """
+        self.task_history = state.get("task_history", [])
+        self.current_task_idx = state.get("current_task_idx", 0)
+
     def save_state(self, path: str) -> None:
         """Save method-specific state."""
         pass

@@ -300,6 +300,33 @@ class DOC(ContinualLearningMethod):
         """Return the model for inference."""
         return self.model
 
+    def get_state_dict(self) -> Dict[str, Any]:
+        """Return DOC state: important directions and config."""
+        state = super().get_state_dict()
+        state["doc_lambda"] = self.doc_lambda
+        state["subspace_fraction"] = self.subspace_fraction
+        state["use_gradient_projection"] = self.use_gradient_projection
+        state["target_param_names"] = self.target_param_names
+        state["important_directions"] = {
+            name: d.cpu() for name, d in self.important_directions.items()
+        }
+        return state
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore DOC state from checkpoint."""
+        super().load_state_dict(state)
+        self.doc_lambda = state.get("doc_lambda", self.doc_lambda)
+        self.subspace_fraction = state.get("subspace_fraction", self.subspace_fraction)
+        self.use_gradient_projection = state.get(
+            "use_gradient_projection", self.use_gradient_projection
+        )
+        if "important_directions" in state:
+            self.important_directions = state["important_directions"]
+        # Reset accumulator for the next task
+        for name in self.target_param_names:
+            self.gradient_accumulator[name] = None
+        self.gradient_count = 0
+
     def save_state(self, path: str) -> None:
         """Save DOC state including important directions."""
         import json

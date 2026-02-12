@@ -70,6 +70,11 @@ class ICANetworksCL(ContinualLearningMethod):
 
         if ica_template_path:
             self._load_ica_templates(ica_template_path)
+        else:
+            logger.warning(
+                "ICA Networks method initialized without template path. "
+                "No masking will be applied. Provide --ica_template_path to enable ICA masking."
+            )
 
     def _load_ica_templates(self, template_path: str) -> None:
         """Load precomputed ICA templates."""

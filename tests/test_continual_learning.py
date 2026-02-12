@@ -131,8 +131,9 @@ class TestDatasetConfig:
         )
 
         order = get_task_order("order_1")
-        assert len(order) == 4  # order_1 has 4 tasks
+        assert len(order) == 5  # order_1 has 5 tasks (CL Benchmark)
         assert "ag_news" in order
+        assert "yelp" in order
         assert "dbpedia" in order
 
     def test_get_long_task_order(self):

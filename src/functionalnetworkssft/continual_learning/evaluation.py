@@ -16,6 +16,7 @@ from torch.optim import AdamW
 from tqdm import tqdm
 from transformers import (
     AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
 )
@@ -86,12 +87,18 @@ MODEL_CONFIGS = {
 }
 
 
+def _is_seq2seq_model(model_key: str) -> bool:
+    """Check if the model key refers to a seq2seq model (e.g., T5)."""
+    return "t5" in model_key.lower()
+
+
 def load_model_and_tokenizer(
     model_key: str, device: str = "auto", use_auth_token: bool = True
 ):
     """Load model and tokenizer with LoRA configuration."""
     config = MODEL_CONFIGS[model_key]
-    logger.info(f"Loading model: {config['model_name']}")
+    is_seq2seq = _is_seq2seq_model(model_key)
+    logger.info(f"Loading model: {config['model_name']} (seq2seq={is_seq2seq})")
 
     tokenizer = AutoTokenizer.from_pretrained(
         config["model_name"], token=use_auth_token
@@ -99,19 +106,21 @@ def load_model_and_tokenizer(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
+    model_cls = AutoModelForSeq2SeqLM if is_seq2seq else AutoModelForCausalLM
+    model = model_cls.from_pretrained(
         config["model_name"],
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
         device_map=device,
         token=use_auth_token,
     )
 
+    task_type = TaskType.SEQ_2_SEQ_LM if is_seq2seq else TaskType.CAUSAL_LM
     lora_config = LoraConfig(
         r=config["lora_r"],
         lora_alpha=config["lora_alpha"],
         lora_dropout=config["lora_dropout"],
         target_modules=config["lora_target_modules"],
-        task_type=TaskType.CAUSAL_LM,
+        task_type=task_type,
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -126,13 +135,17 @@ def evaluate_task(
     test_data,
     device: str = "cuda",
 ) -> float:
-    """Evaluate model accuracy on a task using generation."""
+    """Evaluate model accuracy on a task using generation.
+
+    Test data contains prompt-only input_ids (no answer) and label_idx
+    for ground truth comparison.
+    """
     model.eval()
     correct = 0
     total = 0
 
     config = get_dataset_config(task_name)
-    valid_answers = list(config.label_map.values())
+    valid_answers = [v.lower() for v in config.label_map.values()]
 
     with torch.no_grad():
         for example in tqdm(test_data, desc=f"Eval {task_name}", leave=False):
@@ -147,17 +160,16 @@ def evaluate_task(
                 pad_token_id=tokenizer.pad_token_id,
             )
 
-            generated = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            predicted = generated.split()[-1].strip().lower()
+            # Extract only the newly generated tokens
+            new_tokens = outputs[0][input_ids.shape[1]:]
+            generated = tokenizer.decode(new_tokens, skip_special_tokens=True)
+            predicted = generated.strip().split()[0].lower() if generated.strip() else ""
 
-            labels = example["labels"]
-            ground_truth = None
-            for ans in valid_answers:
-                if ans.lower() in tokenizer.decode(labels).lower():
-                    ground_truth = ans.lower()
-                    break
+            # Ground truth from stored label index
+            label_idx = example["label_idx"]
+            ground_truth = config.label_map[label_idx].lower()
 
-            if ground_truth and predicted.startswith(ground_truth[:3]):
+            if predicted.startswith(ground_truth[:3]):
                 correct += 1
             total += 1
 
@@ -201,6 +213,11 @@ def train_on_task(
 
             optimizer.zero_grad()
             loss.backward()
+
+            # Apply gradient projection for DOC method
+            if hasattr(cl_method, 'apply_gradient_projection'):
+                cl_method.apply_gradient_projection()
+
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
@@ -210,6 +227,49 @@ def train_on_task(
             pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
     pbar.close()
+
+
+def compute_baseline_accuracies(
+    model_key: str,
+    task_order: List[str],
+    dataset_loader: CLDatasetLoader,
+    tokenizer,
+    seed: int = 42,
+    device: str = "cuda",
+) -> Dict[int, float]:
+    """
+    Compute single-task baseline accuracies for FWT computation.
+
+    For each task, trains a fresh LoRA model on that task alone and
+    records the accuracy. These serve as the 'standard fine-tuning'
+    baselines in the FWT formula.
+
+    Returns:
+        Dictionary mapping task index to baseline accuracy.
+    """
+    baselines = {}
+
+    for t, task_name in enumerate(task_order):
+        logger.info(f"Computing baseline for task {t + 1}/{len(task_order)}: {task_name}")
+        torch.manual_seed(seed)
+
+        model, tok, config = load_model_and_tokenizer(model_key, device)
+        baseline_method = LoRABaseline(model, config)
+
+        task_data = dataset_loader.load_dataset(task_name)
+        baseline_method.before_task(0, task_name, task_data)
+        train_on_task(baseline_method, task_data["train"], config, device)
+
+        accuracy = evaluate_task(model, tok, task_name, task_data["test"], device)
+        baselines[t] = accuracy
+        logger.info(f"  Baseline accuracy for {task_name}: {accuracy:.2f}%")
+
+        # Free memory
+        del model, tok, baseline_method
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    return baselines
 
 
 def run_continual_learning_evaluation(
@@ -259,6 +319,16 @@ def run_continual_learning_evaluation(
 
     cl_method = METHODS[method_name](model, config, **method_kwargs)
 
+    # Compute FWT baselines if requested
+    if compute_baselines:
+        logger.info("Computing single-task baseline accuracies for FWT...")
+        baselines = compute_baseline_accuracies(
+            model_key, task_order, dataset_loader, tokenizer, seed, device
+        )
+        for t, acc in baselines.items():
+            metrics.set_baseline_accuracy(t, acc)
+        logger.info("Baseline computation complete.")
+
     for T, task_name in enumerate(task_order):
         logger.info(f"\nTask {T + 1}/{num_tasks}: {task_name}")
 
@@ -306,6 +376,8 @@ def run_continual_learning_evaluation(
     logger.info(f"\nResults saved to {output_file}")
     logger.info(f"Final AA: {results['average_accuracy']:.2f}%")
     logger.info(f"Final BWT: {results['backward_transfer']:.2f}")
+    if compute_baselines:
+        logger.info(f"Final FWT: {results['forward_transfer']:.2f}")
 
     return results
 

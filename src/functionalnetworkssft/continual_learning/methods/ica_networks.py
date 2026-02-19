@@ -71,9 +71,12 @@ class ICANetworksCL(ContinualLearningMethod):
         if ica_template_path:
             self._load_ica_templates(ica_template_path)
         else:
-            logger.warning(
-                "ICA Networks method initialized without template path. "
-                "No masking will be applied. Provide --ica_template_path to enable ICA masking."
+            logger.error(
+                "ICA Networks method initialized WITHOUT a template path. "
+                "No ICA masking will be applied — the method degrades to "
+                "vanilla LoRA and CL benchmark results will be INVALID. "
+                "Provide ica_template_path (or --ica_template_path on the CLI) "
+                "to enable ICA masking."
             )
 
     def _load_ica_templates(self, template_path: str) -> None:
@@ -119,7 +122,15 @@ class ICANetworksCL(ContinualLearningMethod):
         """Setup ICA masking before training on a task."""
         super().before_task(task_idx, task_name, task_data)
 
-        if task_idx > 0 and self.ica_mask is not None:
+        if self.ica_mask is None:
+            if task_idx > 0:
+                logger.warning(
+                    f"Task {task_idx} ({task_name}): ICA mask is None — "
+                    "skipping masking. Results will not reflect ICA method."
+                )
+            return
+
+        if task_idx > 0:
             protected = self._select_components_to_protect(task_idx, task_data)
             self.task_protected_components[task_idx] = protected
             logger.info(f"Task {task_idx}: Protecting components {protected}")

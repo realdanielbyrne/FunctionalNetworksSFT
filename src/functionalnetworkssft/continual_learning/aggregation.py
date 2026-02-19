@@ -196,7 +196,7 @@ def generate_per_task_forgetting_table(
         return None
 
     avg_matrix = np.mean(matrices, axis=0)
-    from .datasets.config import get_task_order
+    from .task_data.config import get_task_order
 
     task_names = get_task_order(order)
     columns = [f"After T{i+1}" for i in range(avg_matrix.shape[1])]

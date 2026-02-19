@@ -21,8 +21,8 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from .datasets.config import TASK_ORDERS, get_dataset_config, get_task_order
-from .datasets.loaders import CLDatasetLoader
+from .task_data.config import TASK_ORDERS, get_dataset_config, get_task_order
+from .task_data.loaders import CLDatasetLoader
 from .methods.base import ContinualLearningMethod
 from .methods.doc import DOC
 from .methods.ewc import EWC

@@ -26,13 +26,13 @@ import numpy as np
 import torch
 
 from .checkpointing import CLCheckpoint
-from .datasets.config import (
+from .task_data.config import (
     ALL_DATASETS,
     TASK_ORDERS,
     get_dataset_config,
     get_task_order,
 )
-from .datasets.loaders import CLDatasetLoader
+from .task_data.loaders import CLDatasetLoader
 from .evaluation import (
     METHODS,
     MODEL_CONFIGS,

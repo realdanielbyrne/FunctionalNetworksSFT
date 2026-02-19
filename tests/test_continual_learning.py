@@ -119,7 +119,7 @@ class TestDatasetConfig:
 
     def test_get_dataset_config(self):
         """Test getting dataset configuration."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_dataset_config,
         )
 
@@ -130,7 +130,7 @@ class TestDatasetConfig:
 
     def test_get_task_order(self):
         """Test getting task order."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_task_order,
         )
 
@@ -142,7 +142,7 @@ class TestDatasetConfig:
 
     def test_get_long_task_order(self):
         """Test getting long chain task order."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_task_order,
         )
 
@@ -151,7 +151,7 @@ class TestDatasetConfig:
 
     def test_invalid_dataset(self):
         """Test error handling for invalid dataset."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_dataset_config,
         )
 
@@ -160,7 +160,7 @@ class TestDatasetConfig:
 
     def test_invalid_task_order(self):
         """Test error handling for invalid task order."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_task_order,
         )
 
@@ -169,7 +169,7 @@ class TestDatasetConfig:
 
     def test_is_standard_benchmark(self):
         """Test standard benchmark detection."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             is_standard_benchmark,
         )
 
@@ -185,10 +185,10 @@ class TestPromptTemplates:
 
     def test_format_example_sentiment(self):
         """Test sentiment analysis prompt formatting."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_dataset_config,
         )
-        from functionalnetworkssft.continual_learning.datasets.prompts import (
+        from functionalnetworkssft.continual_learning.task_data.prompts import (
             format_example,
         )
 
@@ -205,10 +205,10 @@ class TestPromptTemplates:
 
     def test_format_example_topic_classification(self):
         """Test topic classification prompt formatting."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_dataset_config,
         )
-        from functionalnetworkssft.continual_learning.datasets.prompts import (
+        from functionalnetworkssft.continual_learning.task_data.prompts import (
             format_example,
         )
 
@@ -223,10 +223,10 @@ class TestPromptTemplates:
 
     def test_format_example_nli(self):
         """Test NLI prompt formatting."""
-        from functionalnetworkssft.continual_learning.datasets.config import (
+        from functionalnetworkssft.continual_learning.task_data.config import (
             get_dataset_config,
         )
-        from functionalnetworkssft.continual_learning.datasets.prompts import (
+        from functionalnetworkssft.continual_learning.task_data.prompts import (
             format_example,
         )
 
@@ -245,7 +245,7 @@ class TestPromptTemplates:
 
     def test_create_chat_format(self):
         """Test chat format creation."""
-        from functionalnetworkssft.continual_learning.datasets.prompts import (
+        from functionalnetworkssft.continual_learning.task_data.prompts import (
             create_chat_format,
         )
 

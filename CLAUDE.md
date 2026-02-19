@@ -104,21 +104,31 @@ poetry run fnsft \
     --ica_component_ids [0,1]
 
 # Using YAML config file
-poetry run fnsft --config experiments/peft_vs_peft-ica/experiment_b_peft_ica/config/experiment_b_config.yaml
+poetry run fnsft --config experiments/continual_learning/configs/llama_7b.yaml
 ```
 
-### Running Experiments
+### Running Continual Learning Experiments
 
 ```bash
-# Run all experiments (located in experiments/peft_vs_peft-ica/)
-cd experiments/peft_vs_peft-ica
-poetry run python run_experiments.py
+# Run full experiment suite (all methods, all orders)
+poetry run fnsft-cl-orchestrate \
+    --config experiments/continual_learning/configs/llama_7b.yaml \
+    --phase all
 
-# Run individual experiment
-poetry run python experiment_b_peft_ica/scripts/run_experiment_b.py
+# Quick smoke test (2 tasks, 50 steps)
+poetry run fnsft-cl-orchestrate \
+    --model llama-3.2-1b \
+    --methods lora ewc \
+    --orders order_1 \
+    --seeds 1 \
+    --override_steps 50 \
+    --skip_long_chains \
+    --phase experiments
 
-# Evaluate trained models
-poetry run python evaluate_models.py
+# Aggregate results into publication tables
+poetry run fnsft-cl-aggregate \
+    --results_csv ./experiments/continual_learning/results/experiments/llama-7b_results.csv \
+    --model llama-7b
 ```
 
 ## High-Level Architecture
@@ -231,12 +241,13 @@ src/functionalnetworkssft/
     ├── platform_setup.py      # Cross-platform setup detection
     └── post_processing.py     # Post-training processing
 
-experiments/peft_vs_peft-ica/  # Research experiments
-├── experiment_a_peft_only/    # Baseline: PEFT only
-├── experiment_b_peft_ica/     # PEFT + ICA lesion
-├── experiment_c_peft_ica_preserve/  # PEFT + ICA preserve
-├── run_experiments.py         # Runs all experiments
-└── evaluate_models.py         # Model evaluation
+experiments/continual_learning/  # Continual learning experiments
+├── configs/                     # YAML experiment configurations
+│   ├── llama_7b.yaml           # LLaMA-7B (paper)
+│   ├── llama_13b.yaml          # LLaMA-13B (paper)
+│   └── llama_3_2_1b.yaml      # LLaMA-3.2-1B (development)
+├── scripts/                     # Helper scripts
+└── results/                     # Output directory
 
 tests/                         # Comprehensive test suite
 ├── test_ica_masking.py       # Core ICA functionality tests

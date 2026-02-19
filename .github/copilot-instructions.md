@@ -106,16 +106,20 @@ poetry run fnsft \
 
 ### Running Experiments
 
-Located in [experiments/peft_vs_peft-ica](../experiments/peft_vs_peft-ica):
-- **Centralized config**: `common_config.yaml` contains shared parameters
-- **Python overrides**: `run_experiments.py` programmatically defines experiment-specific settings
-- **No duplicate configs**: Prevents drift across experiments
+Located in [experiments/continual_learning](../experiments/continual_learning):
+- **YAML configs**: `configs/llama_7b.yaml` etc. define per-model experiment settings
+- **Orchestrator**: Autonomous, resumable execution of full experiment suites
+- **CSV-based resumability**: Experiments skip completed rows on restart
 
 ```bash
-cd experiments/peft_vs_peft-ica
-poetry run python run_experiments.py              # Run all (A, B, C)
-poetry run python run_experiments.py --experiment b  # Run single experiment
-poetry run python evaluate_models.py              # Compare results
+# Run full experiment suite from YAML config
+poetry run fnsft-cl-orchestrate \
+    --config experiments/continual_learning/configs/llama_7b.yaml --phase all
+
+# Quick smoke test
+poetry run fnsft-cl-orchestrate \
+    --model llama-3.2-1b --methods lora ewc --orders order_1 \
+    --seeds 1 --override_steps 50 --skip_long_chains --phase experiments
 ```
 
 ## Project-Specific Conventions

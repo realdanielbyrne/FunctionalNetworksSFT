@@ -182,7 +182,7 @@ The authors investigate whether large language models (LLMs) exhibit brain-like 
 - ICA-based discovery: This repo implements FastICA-based network extraction from MLP activations, including a global, group-wise mode. See `src/functionalnetworkssft/ica_mask.py` (`compute_global_networks`) and the CLI for template building in `src/functionalnetworkssft/build_ica_templates.py`.
 - Network masking during SFT: We apply binary masks as forward hooks at MLP outputs to support both lesion and preserve modes. See `ICAMask.apply_component_masks` in `ica_mask.py` and the `--mask_mode` options in the training CLI.
 - Template-driven workflows: Precomputed templates can be saved/loaded (`--ica_template_path`), selecting components (`--ica_component_ids`) and controlling sparsity via percentile thresholds (`--ica_percentile`).
-- Experimental comparisons: The `experiments/peft_vs_peft-ica` directory includes runs contrasting standard PEFT with PEFT+ICA masking in lesion/preserve settings.
+- Experimental comparisons: The `experiments/continual_learning` directory implements the DOC paper (Zhang et al., 2025) evaluation protocol comparing ICA-based masking against established CL baselines (EWC, LwF, O-LoRA, DOC).
 
 This repository is an independent, engineering-focused reimplementation that operationalizes the paper’s core ideas for supervised fine-tuning workflows (HF Transformers + LoRA/QLoRA), enabling reproducible ICA template building, component selection, and functional-network-aware training.
 

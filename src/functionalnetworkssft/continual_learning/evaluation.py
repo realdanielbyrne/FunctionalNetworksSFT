@@ -5,9 +5,10 @@ Main evaluation loop for continual learning experiments.
 import argparse
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -68,7 +69,7 @@ MODEL_CONFIGS = {
         "model_name": "meta-llama/Llama-3.2-1B-Instruct",
         "learning_rate": 1e-4,
         "batch_size": 8,
-        "num_steps_per_task": 500,
+        "num_steps_per_task": 1000,
         "lora_r": 16,
         "lora_alpha": 32,
         "lora_dropout": 0.05,
@@ -128,6 +129,44 @@ def load_model_and_tokenizer(
     return model, tokenizer, config
 
 
+def _match_prediction(
+    predicted_text: str, ground_truth: str, valid_answers: List[str]
+) -> bool:
+    """Robust answer matching: exact > normalized prefix > best-matching answer.
+
+    Args:
+        predicted_text: Raw generated text (already stripped).
+        ground_truth: Expected answer label (lowercase).
+        valid_answers: All valid answer labels for the task (lowercase).
+
+    Returns:
+        True if the prediction matches the ground truth.
+    """
+    pred = re.sub(r"[^\w\s]", "", predicted_text.strip()).split()
+    if not pred:
+        return False
+    pred_word = pred[0].lower()
+    gt = ground_truth.lower()
+
+    # 1. Exact match
+    if pred_word == gt:
+        return True
+
+    # 2. Ground truth starts with prediction or vice versa (min 3 chars)
+    if len(pred_word) >= 3 and (gt.startswith(pred_word) or pred_word.startswith(gt)):
+        return True
+
+    # 3. Check if pred matches any valid answer uniquely
+    matches = [
+        a for a in valid_answers
+        if a.startswith(pred_word) or pred_word.startswith(a)
+    ]
+    if len(matches) == 1 and matches[0] == gt:
+        return True
+
+    return False
+
+
 def evaluate_task(
     model: torch.nn.Module,
     tokenizer,
@@ -163,17 +202,32 @@ def evaluate_task(
             # Extract only the newly generated tokens
             new_tokens = outputs[0][input_ids.shape[1]:]
             generated = tokenizer.decode(new_tokens, skip_special_tokens=True)
-            predicted = generated.strip().split()[0].lower() if generated.strip() else ""
 
             # Ground truth from stored label index
             label_idx = example["label_idx"]
             ground_truth = config.label_map[label_idx].lower()
 
-            if predicted.startswith(ground_truth[:3]):
+            if _match_prediction(generated, ground_truth, valid_answers):
                 correct += 1
             total += 1
 
     accuracy = (correct / total) * 100 if total > 0 else 0.0
+
+    # Sanity checks
+    num_classes = config.num_classes
+    chance_level = 100.0 / num_classes
+    if accuracy < chance_level * 0.5:
+        logger.warning(
+            f"Evaluation sanity check: {task_name} accuracy {accuracy:.1f}% is below "
+            f"half of chance level ({chance_level * 0.5:.1f}%). "
+            f"This may indicate a prompt/generation mismatch."
+        )
+    if accuracy > 99.5:
+        logger.warning(
+            f"Evaluation sanity check: {task_name} accuracy {accuracy:.1f}% is "
+            f"suspiciously high (>99.5%). Check for possible data leakage."
+        )
+
     return accuracy
 
 
@@ -182,8 +236,24 @@ def train_on_task(
     train_data,
     config: Dict,
     device: str = "cuda",
-) -> None:
-    """Train model on a single task using the CL method."""
+    optimizer_state: Optional[Dict] = None,
+    scheduler_state: Optional[Dict] = None,
+    start_step: int = 0,
+) -> Tuple[Dict, Dict]:
+    """Train model on a single task using the CL method.
+
+    Args:
+        cl_method: The continual learning method instance.
+        train_data: Training dataset.
+        config: Model/training configuration dict.
+        device: Device for tensors.
+        optimizer_state: Optional optimizer state dict to resume from.
+        scheduler_state: Optional scheduler state dict to resume from.
+        start_step: Step to resume training from.
+
+    Returns:
+        Tuple of (optimizer_state_dict, scheduler_state_dict) for checkpointing.
+    """
     model = cl_method.model
     model.train()
 
@@ -193,8 +263,13 @@ def train_on_task(
         optimizer, num_warmup_steps=num_steps // 10, num_training_steps=num_steps
     )
 
-    step = 0
-    pbar = tqdm(total=num_steps, desc="Training")
+    if optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
+    if scheduler_state is not None:
+        scheduler.load_state_dict(scheduler_state)
+
+    step = start_step
+    pbar = tqdm(total=num_steps, initial=start_step, desc="Training")
 
     while step < num_steps:
         train_data = train_data.shuffle()
@@ -227,6 +302,7 @@ def train_on_task(
             pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
     pbar.close()
+    return optimizer.state_dict(), scheduler.state_dict()
 
 
 def run_single_task_cycle(
@@ -238,7 +314,9 @@ def run_single_task_cycle(
     config: Dict,
     metrics: ContinualLearningMetrics,
     device: str = "cuda",
-) -> None:
+    optimizer_state: Optional[Dict] = None,
+    scheduler_state: Optional[Dict] = None,
+) -> Tuple[Dict, Dict]:
     """Train on task T and evaluate all tasks 0..T.
 
     This is the core task cycle extracted for reuse by the orchestrator.
@@ -253,6 +331,11 @@ def run_single_task_cycle(
         config: Model/training configuration dict.
         metrics: ContinualLearningMetrics to record accuracy into.
         device: Device for tensors.
+        optimizer_state: Optional optimizer state to resume from.
+        scheduler_state: Optional scheduler state to resume from.
+
+    Returns:
+        Tuple of (optimizer_state_dict, scheduler_state_dict).
     """
     num_tasks = len(task_order)
     task_name = task_order[T]
@@ -260,7 +343,11 @@ def run_single_task_cycle(
 
     task_data = dataset_loader.load_dataset(task_name)
     cl_method.before_task(T, task_name, task_data)
-    train_on_task(cl_method, task_data["train"], config, device)
+    opt_state, sched_state = train_on_task(
+        cl_method, task_data["train"], config, device,
+        optimizer_state=optimizer_state,
+        scheduler_state=scheduler_state,
+    )
     cl_method.after_task(T, task_name, task_data)
 
     eval_model = cl_method.get_model_for_inference()
@@ -278,6 +365,8 @@ def run_single_task_cycle(
     logger.info(f"Current AA: {metrics.compute_average_accuracy(T + 1):.2f}%")
     if T > 0:
         logger.info(f"Current BWT: {metrics.compute_backward_transfer(T + 1):.2f}")
+
+    return opt_state, sched_state
 
 
 def compute_baseline_accuracies(
@@ -380,10 +469,13 @@ def run_continual_learning_evaluation(
             metrics.set_baseline_accuracy(t, acc)
         logger.info("Baseline computation complete.")
 
+    opt_state, sched_state = None, None
     for T in range(num_tasks):
-        run_single_task_cycle(
+        opt_state, sched_state = run_single_task_cycle(
             T, task_order, cl_method, dataset_loader,
             tokenizer, config, metrics, device,
+            optimizer_state=opt_state,
+            scheduler_state=sched_state,
         )
 
     results = metrics.get_full_report()

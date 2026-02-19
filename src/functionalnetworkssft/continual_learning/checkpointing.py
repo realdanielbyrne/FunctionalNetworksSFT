@@ -39,6 +39,7 @@ class CLCheckpoint:
         cl_method: ContinualLearningMethod,
         metrics: ContinualLearningMetrics,
         optimizer_state: Optional[Dict] = None,
+        scheduler_state: Optional[Dict] = None,
     ) -> None:
         """Save checkpoint after completing a task.
 
@@ -47,7 +48,8 @@ class CLCheckpoint:
             model: The model (with LoRA adapters).
             cl_method: The CL method instance with accumulated state.
             metrics: Accuracy matrix recorded so far.
-            optimizer_state: Optional optimizer state dict.
+            optimizer_state: Optimizer state dict (recommended for resume).
+            scheduler_state: Scheduler state dict (recommended for resume).
         """
         task_dir = self._task_dir(task_idx)
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -88,9 +90,17 @@ class CLCheckpoint:
         # Save metrics
         metrics.save(task_dir / "metrics.json")
 
-        # Save optimizer state
+        # Save optimizer and scheduler state
         if optimizer_state is not None:
             torch.save(optimizer_state, task_dir / "optimizer.pt")
+        if scheduler_state is not None:
+            torch.save(scheduler_state, task_dir / "scheduler.pt")
+
+        if optimizer_state is None:
+            logger.warning(
+                f"Checkpoint for task {task_idx} saved WITHOUT optimizer state. "
+                "Resume will start with a fresh optimizer."
+            )
 
         # Write completion marker for this task
         (task_dir / "DONE").touch()
@@ -124,6 +134,7 @@ class CLCheckpoint:
             - 'cl_method_state': Dict of CL method state
             - 'metrics': ContinualLearningMetrics instance
             - 'optimizer_state': Optimizer state dict (or None)
+            - 'scheduler_state': Scheduler state dict (or None)
         """
         task_dir = self._task_dir(task_idx)
         if not (task_dir / "DONE").exists():
@@ -166,6 +177,14 @@ class CLCheckpoint:
         result["optimizer_state"] = (
             torch.load(opt_path, map_location="cpu", weights_only=False)
             if opt_path.exists()
+            else None
+        )
+
+        # Load scheduler state
+        sched_path = task_dir / "scheduler.pt"
+        result["scheduler_state"] = (
+            torch.load(sched_path, map_location="cpu", weights_only=False)
+            if sched_path.exists()
             else None
         )
 

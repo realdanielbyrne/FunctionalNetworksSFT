@@ -26,9 +26,11 @@ training:
 
 evaluation:
   max_seq_length: 512
-  seed: 42
+  num_seeds: 3
+  lm_eval_benchmarks:
+    - "mmlu"
 
-# Task orders to run
+# Task orders to run (DOC Table 7)
 task_orders:
   standard:
     - "order_1"
@@ -39,22 +41,41 @@ task_orders:
     - "order_5"
     - "order_6"
 
-# Methods to compare
+# CL methods with per-method hyperparameters
 methods:
-  - "lora"         # Baseline (catastrophic forgetting)
-  - "ewc"          # Elastic Weight Consolidation
-  - "lwf"          # Learning without Forgetting
-  - "o_lora"       # Orthogonal LoRA
-  - "doc"          # Dynamic Orthogonal Continual
-  - "ica_networks" # ICA-based functional networks
+  lora: {}
+  ewc:
+    ewc_lambda: 0.4
+  lwf:
+    lwf_alpha: 1.0
+    temperature: 2.0
+  o_lora:
+    ortho_lambda: 0.1
+  doc:
+    doc_lambda: 0.5
+    subspace_fraction: 0.1
 
-# ICA-specific configuration
+# ICA variations (each becomes a separate method in the experiment matrix)
+ica_variations:
+  ica_lesion:
+    mask_mode: "lesion"
+    anti_drift: false
+  ica_preserve:
+    mask_mode: "preserve"
+    anti_drift: false
+  ica_lesion_antidrift:
+    mask_mode: "lesion"
+    anti_drift: true
+  ica_preserve_antidrift:
+    mask_mode: "preserve"
+    anti_drift: true
+
+# ICA global configuration
 ica:
   components: 10
   percentile: 98.0
-  mask_mode: "lesion"  # or "preserve"
-  template_path: null  # Path to precomputed templates
+  template_path: null
 
 output:
   results_dir: "./experiments/continual_learning/results"
-  save_models: false
+  save_models: true

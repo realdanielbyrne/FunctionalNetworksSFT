@@ -1,6 +1,7 @@
 """
 Prompt templates and formatting for continual learning datasets.
 
+Prompt wording follows DOC paper (Zhang et al., 2025) Table 8.
 Each task type has a template that converts raw examples into a
 classification prompt. The ``format_example`` function is the main
 entry point used by the dataset loader.
@@ -12,7 +13,7 @@ from .config import DatasetConfig
 
 
 # ---------------------------------------------------------------------------
-# Task-type prompt builders
+# Task-type prompt builders  (DOC Table 8)
 # ---------------------------------------------------------------------------
 
 
@@ -22,10 +23,11 @@ def _format_sentiment(example: Dict[str, Any], config: DatasetConfig) -> str:
     text = example.get(text_field, "")
     labels = ", ".join(config.label_map.values())
     return (
-        f"Classify the sentiment of the following text.\n"
-        f"Options: {labels}\n\n"
-        f"Text: {text}\n"
-        f"Sentiment:"
+        f"What is the sentiment of the following paragraph? "
+        f"Choose one from the options.\n\n"
+        f"Paragraph: {text}\n\n"
+        f"Options: {labels}\n"
+        f"Answer:"
     )
 
 
@@ -39,10 +41,11 @@ def _format_topic(example: Dict[str, Any], config: DatasetConfig) -> str:
     text = " ".join(parts)
     labels = ", ".join(config.label_map.values())
     return (
-        f"Classify the topic of the following text.\n"
-        f"Options: {labels}\n\n"
-        f"Text: {text}\n"
-        f"Topic:"
+        f"What is the topic of the following paragraph? "
+        f"Choose one from the options.\n\n"
+        f"Paragraph: {text}\n\n"
+        f"Options: {labels}\n"
+        f"Answer:"
     )
 
 
@@ -52,11 +55,12 @@ def _format_nli(example: Dict[str, Any], config: DatasetConfig) -> str:
     hypothesis = example.get(config.text_fields[1], "")
     labels = ", ".join(config.label_map.values())
     return (
-        f"Determine the relationship between the premise and hypothesis.\n"
-        f"Options: {labels}\n\n"
-        f"Premise: {premise}\n"
-        f"Hypothesis: {hypothesis}\n"
-        f"Relationship:"
+        f"What is the logical relationship between sentence 1 and sentence 2? "
+        f"Choose one from the options.\n\n"
+        f"Sentence 1: {premise}\n"
+        f"Sentence 2: {hypothesis}\n\n"
+        f"Options: {labels}\n"
+        f"Answer:"
     )
 
 
@@ -66,24 +70,27 @@ def _format_paraphrase(example: Dict[str, Any], config: DatasetConfig) -> str:
     q2 = example.get(config.text_fields[1], "")
     labels = ", ".join(config.label_map.values())
     return (
-        f"Determine if the following two questions are paraphrases.\n"
-        f"Options: {labels}\n\n"
-        f"Question 1: {q1}\n"
-        f"Question 2: {q2}\n"
+        f"Whether the first sentence and second sentence have the same meaning? "
+        f"Choose one from the options.\n\n"
+        f"Sentence 1: {q1}\n"
+        f"Sentence 2: {q2}\n\n"
+        f"Options: {labels}\n"
         f"Answer:"
     )
 
 
 def _format_qa(example: Dict[str, Any], config: DatasetConfig) -> str:
     """Format QA tasks (boolq, multirc)."""
+    labels = ", ".join(config.label_map.values())
     if config.name == "boolq":
         passage = example.get("passage", "")
         question = example.get("question", "")
         return (
-            f"Answer the question based on the passage.\n"
-            f"Options: true, false\n\n"
+            f"According to the following passage, is the question true or false? "
+            f"Choose one from the options.\n\n"
             f"Passage: {passage}\n"
-            f"Question: {question}\n"
+            f"Question: {question}\n\n"
+            f"Options: {labels}\n"
             f"Answer:"
         )
     # multirc
@@ -91,12 +98,13 @@ def _format_qa(example: Dict[str, Any], config: DatasetConfig) -> str:
     question = example.get("question", "")
     answer_text = example.get("answer", "")
     return (
-        f"Is the answer correct based on the paragraph?\n"
-        f"Options: true, false\n\n"
-        f"Paragraph: {paragraph}\n"
+        f"According to the following passage and question, is the candidate answer "
+        f"true or false? Choose one from the options.\n\n"
+        f"Passage: {paragraph}\n"
         f"Question: {question}\n"
-        f"Answer: {answer_text}\n"
-        f"Correct:"
+        f"Candidate answer: {answer_text}\n\n"
+        f"Options: {labels}\n"
+        f"Answer:"
     )
 
 
@@ -105,11 +113,14 @@ def _format_causal(example: Dict[str, Any], config: DatasetConfig) -> str:
     premise = example.get("premise", "")
     choice1 = example.get("choice1", "")
     choice2 = example.get("choice2", "")
+    labels = ", ".join(config.label_map.values())
     return (
-        f"Choose the more likely cause or effect.\n\n"
+        f"Given the premise, which alternative is more plausible? "
+        f"Choose one from the options.\n\n"
         f"Premise: {premise}\n"
         f"Choice 1: {choice1}\n"
-        f"Choice 2: {choice2}\n"
+        f"Choice 2: {choice2}\n\n"
+        f"Options: {labels}\n"
         f"Answer:"
     )
 
@@ -119,15 +130,16 @@ def _format_wsd(example: Dict[str, Any], config: DatasetConfig) -> str:
     s1 = example.get("sentence1", "")
     s2 = example.get("sentence2", "")
     word = example.get("word", "")
+    labels = ", ".join(config.label_map.values())
     return (
-        f"Does the word '{word}' have the same meaning in both sentences?\n"
-        f"Options: true, false\n\n"
+        f"Given a word and two sentences, whether the word is used with the same sense? "
+        f"Choose one from the options.\n\n"
+        f"Word: {word}\n"
         f"Sentence 1: {s1}\n"
-        f"Sentence 2: {s2}\n"
+        f"Sentence 2: {s2}\n\n"
+        f"Options: {labels}\n"
         f"Answer:"
     )
-
-
 
 
 # ---------------------------------------------------------------------------

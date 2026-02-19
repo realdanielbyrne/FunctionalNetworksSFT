@@ -5,7 +5,8 @@ Provides autonomous, resumable execution of the full experimental suite:
   Phase 0: ICA template building (skip if exists)
   Phase 1: FWT baseline computation (skip completed rows)
   Phase 2: CL experiments - method x order x seed (skip completed, checkpoint per task)
-  Phase 3: Result aggregation and publication tables
+  Phase 3: lm-eval benchmarks (general capability evaluation)
+  Phase 4: Result aggregation and publication tables
 
 Inspired by the N-BEATS-Lightning experiment runner pattern:
 CSV-as-source-of-truth resumability with immediate row-by-row appending.
@@ -20,7 +21,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -66,6 +67,7 @@ RESULTS_CSV_COLUMNS = [
     "accuracy_matrix",
     "training_time_seconds",
     "method_params",
+    "git_hash",
     "timestamp",
 ]
 
@@ -190,6 +192,14 @@ DEFAULT_METHOD_KWARGS: Dict[str, Dict[str, Any]] = {
     "ica_networks": {"mask_mode": "lesion", "ica_components": 10},
 }
 
+# ICA variation defaults
+ICA_VARIATION_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "ica_lesion": {"mask_mode": "lesion", "anti_drift": False},
+    "ica_preserve": {"mask_mode": "preserve", "anti_drift": False},
+    "ica_lesion_antidrift": {"mask_mode": "lesion", "anti_drift": True},
+    "ica_preserve_antidrift": {"mask_mode": "preserve", "anti_drift": True},
+}
+
 
 def _build_method_kwargs(
     method_name: str,
@@ -197,20 +207,87 @@ def _build_method_kwargs(
     ica_components: int = 10,
     ica_percentile: float = 98.0,
     ica_mask_mode: str = "lesion",
+    method_overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build method-specific kwargs, injecting ICA template path."""
+    # Check if it's an ICA variation
+    if method_name in ICA_VARIATION_DEFAULTS:
+        kwargs = dict(ICA_VARIATION_DEFAULTS[method_name])
+        kwargs["ica_template_path"] = str(template_path) if template_path else None
+        kwargs["ica_components"] = ica_components
+        kwargs["ica_percentile"] = ica_percentile
+        if method_overrides:
+            kwargs.update(method_overrides)
+        return kwargs
+
     kwargs = dict(DEFAULT_METHOD_KWARGS.get(method_name, {}))
     if method_name == "ica_networks":
         kwargs["ica_template_path"] = str(template_path) if template_path else None
         kwargs["ica_components"] = ica_components
         kwargs["ica_percentile"] = ica_percentile
         kwargs["mask_mode"] = ica_mask_mode
+
+    # Apply any per-method overrides from YAML config
+    if method_overrides:
+        kwargs.update(method_overrides)
+
     return kwargs
 
 
+def _resolve_method_class(method_name: str):
+    """Resolve a method name to its class, handling ICA variations."""
+    if method_name in ICA_VARIATION_DEFAULTS:
+        return METHODS["ica_networks"]
+    return METHODS.get(method_name)
+
+
 # ---------------------------------------------------------------------------
-# Phase 0: ICA Template Building
+# ICA Template Management
 # ---------------------------------------------------------------------------
+
+
+def _resolve_ica_template_path(
+    model_key: str,
+    output_dir: Path,
+    task_orders: List[str],
+    ica_components: int = 10,
+    ica_percentile: float = 98.0,
+    ica_template_datasets: Optional[List[str]] = None,
+) -> Optional[Path]:
+    """Resolve ICA template path, building if needed.
+
+    Checks standard location for existing templates, triggers building
+    if missing, and fails fast if building fails.
+
+    Returns:
+        Path to template file, or None if unavailable.
+    """
+    model_name = MODEL_CONFIGS[model_key]["model_name"]
+    sanitized = model_name.replace("/", "_").replace(".", "_")
+    template_dir = output_dir / "ica_templates" / sanitized
+    template_file = template_dir / "global_templates.json"
+
+    if template_file.exists():
+        # Validate template
+        try:
+            with open(template_file) as f:
+                data = json.load(f)
+            meta = data.get("metadata", {})
+            if meta.get("num_components", 0) < 1:
+                logger.warning(f"Template has 0 components: {template_file}")
+                return None
+            logger.info(f"Using existing ICA templates: {template_file}")
+            return template_file
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Invalid template file {template_file}: {e}")
+            return None
+
+    # Try building
+    logger.info(f"ICA templates not found, attempting to build for {model_key}...")
+    return build_ica_templates_if_needed(
+        model_key, output_dir, task_orders,
+        ica_components, ica_percentile, ica_template_datasets,
+    )
 
 
 def build_ica_templates_if_needed(
@@ -391,6 +468,9 @@ def run_single_experiment(
     template_path: Optional[Path],
     device: str,
     method_kwargs: Dict[str, Any],
+    git_hash: str = "unknown",
+    save_final_model: bool = False,
+    final_models_dir: Optional[Path] = None,
 ) -> Optional[Dict]:
     """Run one CL experiment with per-task checkpointing and CSV skip logic.
 
@@ -421,10 +501,16 @@ def run_single_experiment(
     np.random.seed(seed)
     start_time = time.time()
 
+    # Resolve the method class (handles ICA variations)
+    method_cls = _resolve_method_class(method_name)
+    if method_cls is None:
+        logger.error(f"Unknown method: {method_name}")
+        return None
+
     try:
         model, tokenizer, config = load_model_and_tokenizer(model_key, device)
         dataset_loader = CLDatasetLoader(tokenizer, max_seq_length=512, seed=seed)
-        cl_method = METHODS[method_name](model, config, **method_kwargs)
+        cl_method = method_cls(model, config, **method_kwargs)
         metrics = ContinualLearningMetrics(num_tasks=num_tasks, task_names=task_order)
 
         # Load FWT baselines into metrics
@@ -437,6 +523,7 @@ def run_single_experiment(
         # Check for partial checkpoint
         last_task = checkpoint.get_last_completed_task()
         start_task = 0
+        opt_state, sched_state = None, None
 
         if last_task >= 0:
             logger.info(
@@ -468,8 +555,13 @@ def run_single_experiment(
                 model.load_state_dict(state, strict=False)
 
             # Restore CL method state
-            cl_method = METHODS[method_name](model, config, **method_kwargs)
+            cl_method = method_cls(model, config, **method_kwargs)
             cl_method.load_state_dict(ckpt_data["cl_method_state"])
+
+            # Restore optimizer/scheduler state
+            opt_state = ckpt_data.get("optimizer_state")
+            sched_state = ckpt_data.get("scheduler_state")
+
             start_task = last_task + 1
 
         # Run remaining tasks
@@ -478,13 +570,30 @@ def run_single_experiment(
                 f"  [{method_name}/{task_order_name}/seed{seed}] "
                 f"Task {T + 1}/{num_tasks}: {task_order[T]}"
             )
-            run_single_task_cycle(
+            opt_state, sched_state = run_single_task_cycle(
                 T, task_order, cl_method, dataset_loader,
                 tokenizer, config, metrics, device,
+                optimizer_state=opt_state,
+                scheduler_state=sched_state,
             )
-            checkpoint.save_task_checkpoint(T, model, cl_method, metrics)
+            checkpoint.save_task_checkpoint(
+                T, model, cl_method, metrics,
+                optimizer_state=opt_state,
+                scheduler_state=sched_state,
+            )
 
         elapsed = time.time() - start_time
+
+        # Save final model for lm-eval if requested
+        if save_final_model and final_models_dir is not None:
+            final_dir = (
+                final_models_dir
+                / f"{model_key}_{method_name}_{task_order_name}_seed{seed}"
+            )
+            final_dir.mkdir(parents=True, exist_ok=True)
+            model.save_pretrained(final_dir)
+            tokenizer.save_pretrained(final_dir)
+            logger.info(f"  Final model saved to {final_dir}")
 
         # Build result row
         report = metrics.get_full_report()
@@ -502,6 +611,7 @@ def run_single_experiment(
             "accuracy_matrix": json.dumps(report["accuracy_matrix"]),
             "training_time_seconds": f"{elapsed:.1f}",
             "method_params": json.dumps(method_kwargs),
+            "git_hash": git_hash,
             "timestamp": datetime.now().isoformat(),
         }
         append_result(results_csv, row, RESULTS_CSV_COLUMNS)
@@ -517,6 +627,7 @@ def run_single_experiment(
                 "task_order": task_order_name,
                 "config": config,
                 "seed": seed,
+                "git_hash": git_hash,
                 "timestamp": datetime.now().isoformat(),
             }
         )
@@ -566,12 +677,15 @@ def run_experiment_suite(
     baseline_csv: Path,
     ica_components: int = 10,
     ica_percentile: float = 98.0,
-    ica_mask_mode: str = "lesion",
+    method_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
     dry_run: bool = False,
+    git_hash: str = "unknown",
+    save_final_models: bool = False,
 ) -> None:
     """Run the full experiment suite: method x order x seed."""
     results_csv = output_dir / "experiments" / f"{model_key}_results.csv"
     checkpoint_base = output_dir / "checkpoints"
+    final_models_dir = output_dir / "final_models" if save_final_models else None
     init_csv(results_csv, RESULTS_CSV_COLUMNS)
 
     seeds = [BASE_SEED + i for i in range(num_seeds)]
@@ -597,6 +711,8 @@ def run_experiment_suite(
                     print(f"  {status} {method}/{order}/seed{seed}")
         return
 
+    method_overrides = method_overrides or {}
+
     run_count = 0
     for method in methods:
         for order in orders:
@@ -609,7 +725,8 @@ def run_experiment_suite(
 
                 method_kwargs = _build_method_kwargs(
                     method, template_path, ica_components,
-                    ica_percentile, ica_mask_mode,
+                    ica_percentile,
+                    method_overrides=method_overrides.get(method),
                 )
                 run_single_experiment(
                     model_key=model_key,
@@ -623,6 +740,9 @@ def run_experiment_suite(
                     template_path=template_path,
                     device=device,
                     method_kwargs=method_kwargs,
+                    git_hash=git_hash,
+                    save_final_model=save_final_models,
+                    final_models_dir=final_models_dir,
                 )
 
     logger.info(f"\nAll {total} runs processed. Results: {results_csv}")
@@ -642,44 +762,49 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        required=True,
+        default=None,
         choices=list(MODEL_CONFIGS.keys()),
-        help="Model to evaluate",
+        help="Model to evaluate (overrides YAML config)",
     )
     parser.add_argument(
         "--methods",
         type=str,
         nargs="+",
-        default=list(METHODS.keys()),
-        choices=list(METHODS.keys()),
-        help="CL methods to run (default: all)",
+        default=None,
+        help="CL methods to run (default: from config or all)",
     )
     parser.add_argument(
         "--orders",
         type=str,
         nargs="+",
-        default=list(TASK_ORDERS.keys()),
+        default=None,
         choices=list(TASK_ORDERS.keys()),
-        help="Task orders (default: all 6)",
+        help="Task orders (default: from config or all 6)",
     )
     parser.add_argument(
         "--seeds",
         type=int,
-        default=1,
-        help="Number of seeds (default: 1; increase for publication stats)",
+        default=None,
+        help="Number of seeds (default: from config or 1)",
     )
     parser.add_argument(
         "--phase",
         type=str,
         default="all",
-        choices=["all", "templates", "baselines", "experiments", "aggregate"],
+        choices=["all", "templates", "baselines", "experiments", "lm_eval", "aggregate"],
         help="Run specific phase only",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to YAML configuration file",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./experiments/continual_learning/results",
-        help="Base output directory",
+        default=None,
+        help="Base output directory (overrides YAML config)",
     )
     parser.add_argument(
         "--device", type=str, default="auto", help="Device (auto/cuda/mps/cpu)"
@@ -701,13 +826,6 @@ def main():
     )
     parser.add_argument(
         "--ica_percentile", type=float, default=98.0, help="ICA percentile"
-    )
-    parser.add_argument(
-        "--ica_mask_mode",
-        type=str,
-        default="lesion",
-        choices=["lesion", "preserve"],
-        help="ICA masking mode",
     )
     parser.add_argument(
         "--ica_template_datasets",
@@ -732,8 +850,50 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    output_dir = Path(args.output_dir)
+    # --- Load YAML config if provided ---
+    cl_config = None
+    method_overrides: Dict[str, Dict[str, Any]] = {}
+    save_final_models = False
+    lm_eval_benchmarks = ["mmlu"]
+
+    if args.config:
+        from .config import (
+            CLExperimentConfig,
+            config_to_model_config,
+            expand_ica_variations,
+            load_cl_config,
+        )
+
+        cl_config = load_cl_config(args.config)
+
+        # Override MODEL_CONFIGS with YAML values
+        MODEL_CONFIGS[cl_config.model_key] = config_to_model_config(cl_config)
+        logger.info(f"Updated MODEL_CONFIGS[{cl_config.model_key}] from YAML")
+
+        # Store per-method overrides
+        method_overrides = dict(cl_config.methods)
+        save_final_models = cl_config.save_models
+        lm_eval_benchmarks = cl_config.lm_eval_benchmarks
+
+    # --- Resolve arguments (CLI > YAML > defaults) ---
+    model_key = args.model
+    if model_key is None:
+        model_key = cl_config.model_key if cl_config else "llama-3.2-1b"
+
+    # Ensure model_key is in MODEL_CONFIGS
+    if model_key not in MODEL_CONFIGS:
+        parser.error(f"Unknown model: {model_key}. Available: {list(MODEL_CONFIGS.keys())}")
+
+    num_seeds = args.seeds
+    if num_seeds is None:
+        num_seeds = cl_config.num_seeds if cl_config else 1
+
+    output_dir_str = args.output_dir
+    if output_dir_str is None:
+        output_dir_str = cl_config.results_dir if cl_config else "./experiments/continual_learning/results"
+    output_dir = Path(output_dir_str)
     output_dir.mkdir(parents=True, exist_ok=True)
+
     device = _get_device(args.device)
 
     # Apply step override for smoke testing
@@ -742,50 +902,87 @@ def main():
             MODEL_CONFIGS[key]["num_steps_per_task"] = args.override_steps
         logger.info(f"Overriding num_steps_per_task to {args.override_steps}")
 
-    # Filter orders
+    # Build methods list
+    methods = args.methods
+    if methods is None:
+        if cl_config:
+            methods = list(cl_config.methods.keys())
+            # Expand ICA variations into the methods list
+            if cl_config.ica_variations:
+                from .config import expand_ica_variations
+
+                ica_vars = expand_ica_variations(cl_config)
+                for var_name, var_kwargs in ica_vars:
+                    methods.append(var_name)
+                    method_overrides[var_name] = var_kwargs
+        else:
+            methods = list(METHODS.keys())
+
+    # Build orders list
     orders = args.orders
+    if orders is None:
+        if cl_config:
+            orders = cl_config.standard_orders + cl_config.long_chain_orders
+        else:
+            orders = list(TASK_ORDERS.keys())
+
     if args.skip_long_chains:
         orders = [o for o in orders if o in ("order_1", "order_2", "order_3")]
 
+    # --- Reproducibility: capture environment ---
+    git_hash = "unknown"
+    try:
+        from .reproducibility import dump_full_config, save_environment
+
+        git_hash = save_environment(output_dir)
+        if cl_config:
+            dump_full_config(cl_config, output_dir / "config_resolved.json")
+    except Exception as e:
+        logger.warning(f"Could not capture environment info: {e}")
+
     logger.info(f"Device: {device}")
     logger.info(f"Output: {output_dir}")
-    logger.info(f"Model: {args.model}")
-    logger.info(f"Methods: {args.methods}")
+    logger.info(f"Model: {model_key}")
+    logger.info(f"Methods: {methods}")
     logger.info(f"Orders: {orders}")
-    logger.info(f"Seeds: {args.seeds}")
+    logger.info(f"Seeds: {num_seeds}")
     logger.info(f"Phase: {args.phase}")
+    logger.info(f"Git hash: {git_hash}")
+
+    # --- Determine which methods need ICA templates ---
+    ica_methods = [m for m in methods if m.startswith("ica_") or m == "ica_networks"]
 
     # --- Phase 0: ICA Templates ---
     template_path = None
     if args.phase in ("all", "templates"):
-        if "ica_networks" in args.methods:
+        if ica_methods:
             logger.info("\n=== Phase 0: ICA Template Building ===")
-            template_path = build_ica_templates_if_needed(
-                model_key=args.model,
+            template_path = _resolve_ica_template_path(
+                model_key=model_key,
                 output_dir=output_dir,
                 task_orders=orders,
                 ica_components=args.ica_components,
                 ica_percentile=args.ica_percentile,
                 ica_template_datasets=args.ica_template_datasets,
             )
-            if template_path is None:
-                logger.warning(
-                    "ICA template building failed. "
-                    "ICA Networks method will run without masking."
+            if template_path is None and ica_methods:
+                raise RuntimeError(
+                    f"ICA templates required but could not be built for {model_key}. "
+                    f"ICA methods ({ica_methods}) cannot run without templates."
                 )
         else:
-            logger.info("Skipping ICA templates (ica_networks not in methods)")
+            logger.info("Skipping ICA templates (no ICA methods in list)")
 
     if args.phase == "templates":
         return
 
     # --- Phase 1: FWT Baselines ---
-    baseline_csv = output_dir / "baselines" / f"{args.model}_baselines.csv"
+    baseline_csv = output_dir / "baselines" / f"{model_key}_baselines.csv"
     if args.phase in ("all", "baselines"):
         logger.info("\n=== Phase 1: FWT Baselines ===")
-        seeds = [BASE_SEED + i for i in range(args.seeds)]
+        seeds = [BASE_SEED + i for i in range(num_seeds)]
         compute_fwt_baselines(
-            model_key=args.model,
+            model_key=model_key,
             task_orders=orders,
             seeds=seeds,
             csv_path=baseline_csv,
@@ -800,8 +997,8 @@ def main():
         logger.info("\n=== Phase 2: CL Experiments ===")
 
         # If template wasn't built in this run, try to find existing one
-        if template_path is None and "ica_networks" in args.methods:
-            model_name = MODEL_CONFIGS[args.model]["model_name"]
+        if template_path is None and ica_methods:
+            model_name = MODEL_CONFIGS[model_key]["model_name"]
             sanitized = model_name.replace("/", "_").replace(".", "_")
             candidate = (
                 output_dir / "ica_templates" / sanitized / "global_templates.json"
@@ -809,38 +1006,86 @@ def main():
             if candidate.exists():
                 template_path = candidate
                 logger.info(f"Found existing ICA templates: {template_path}")
+            else:
+                logger.error(
+                    f"ICA templates not found for {model_key}. "
+                    f"ICA methods will be skipped."
+                )
+                methods = [m for m in methods if m not in ica_methods]
 
         run_experiment_suite(
-            model_key=args.model,
-            methods=args.methods,
+            model_key=model_key,
+            methods=methods,
             orders=orders,
-            num_seeds=args.seeds,
+            num_seeds=num_seeds,
             output_dir=output_dir,
             device=device,
             template_path=template_path,
             baseline_csv=baseline_csv,
             ica_components=args.ica_components,
             ica_percentile=args.ica_percentile,
-            ica_mask_mode=args.ica_mask_mode,
+            method_overrides=method_overrides,
             dry_run=args.dry_run,
+            git_hash=git_hash,
+            save_final_models=save_final_models,
         )
 
     if args.phase == "experiments":
         return
 
-    # --- Phase 3: Aggregation ---
+    # --- Phase 3: lm-eval Benchmarks ---
+    if args.phase in ("all", "lm_eval"):
+        logger.info("\n=== Phase 3: lm-eval Benchmarks ===")
+        try:
+            from .lm_eval_runner import (
+                run_lm_eval_on_base_model,
+                run_lm_eval_on_completed_experiments,
+            )
+
+            lm_eval_csv = output_dir / "lm_eval" / f"{model_key}_lm_eval.csv"
+            results_csv = output_dir / "experiments" / f"{model_key}_results.csv"
+            final_models = output_dir / "final_models"
+
+            # Base model evaluation
+            model_name = MODEL_CONFIGS[model_key]["model_name"]
+            run_lm_eval_on_base_model(
+                model_key, model_name, lm_eval_benchmarks, lm_eval_csv, device
+            )
+
+            # Post-CL evaluations
+            if save_final_models and final_models.exists():
+                run_lm_eval_on_completed_experiments(
+                    model_key, results_csv, lm_eval_csv,
+                    final_models, lm_eval_benchmarks, device,
+                )
+            else:
+                logger.info(
+                    "Skipping post-CL lm-eval (save_models not enabled or no final models)"
+                )
+
+        except ImportError as e:
+            logger.warning(f"lm-eval not available: {e}")
+        except Exception as e:
+            logger.error(f"lm-eval phase failed: {e}", exc_info=True)
+
+    if args.phase == "lm_eval":
+        return
+
+    # --- Phase 4: Aggregation ---
     if args.phase in ("all", "aggregate"):
-        logger.info("\n=== Phase 3: Aggregation & Tables ===")
+        logger.info("\n=== Phase 4: Aggregation & Tables ===")
         try:
             from .aggregation import generate_all_tables
 
-            results_csv = output_dir / "experiments" / f"{args.model}_results.csv"
+            results_csv = output_dir / "experiments" / f"{model_key}_results.csv"
+            lm_eval_csv = output_dir / "lm_eval" / f"{model_key}_lm_eval.csv"
             tables_dir = output_dir / "tables"
             generate_all_tables(
                 results_csv=results_csv,
                 baseline_csv=baseline_csv,
-                model=args.model,
+                model=model_key,
                 output_dir=tables_dir,
+                lm_eval_csv=lm_eval_csv if lm_eval_csv.exists() else None,
             )
         except ImportError:
             logger.warning(

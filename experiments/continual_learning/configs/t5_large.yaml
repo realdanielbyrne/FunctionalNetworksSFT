@@ -1,5 +1,5 @@
 # Continual Learning Evaluation Configuration
-# Model: T5-Large (matches DOC paper setup)
+# Model: T5-Large (skipped for this study -- focus on decoder-only architectures)
 
 model:
   name: "t5-large"
@@ -24,9 +24,11 @@ training:
 
 evaluation:
   max_seq_length: 512
-  seed: 42
+  num_seeds: 3
+  lm_eval_benchmarks:
+    - "mmlu"
 
-# Task orders to run
+# Task orders to run (DOC Table 7)
 task_orders:
   standard:
     - "order_1"
@@ -37,21 +39,25 @@ task_orders:
     - "order_5"
     - "order_6"
 
-# Methods to compare
+# CL methods
 methods:
-  - "lora"         # Baseline (catastrophic forgetting)
-  - "ewc"          # Elastic Weight Consolidation
-  - "lwf"          # Learning without Forgetting
-  - "o_lora"       # Orthogonal LoRA
-  - "doc"          # Dynamic Orthogonal Continual
-  - "ica_networks" # ICA-based functional networks
+  lora: {}
+  ewc:
+    ewc_lambda: 0.4
+  lwf:
+    lwf_alpha: 1.0
+    temperature: 2.0
+  o_lora:
+    ortho_lambda: 0.1
+  doc:
+    doc_lambda: 0.5
+    subspace_fraction: 0.1
 
-# ICA-specific configuration
+# ICA global configuration
 ica:
   components: 10
   percentile: 98.0
-  mask_mode: "lesion"  # or "preserve"
-  template_path: null  # Path to precomputed templates
+  template_path: null
 
 output:
   results_dir: "./experiments/continual_learning/results"

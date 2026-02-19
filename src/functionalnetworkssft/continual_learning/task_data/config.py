@@ -2,7 +2,7 @@
 Dataset configurations and task orders for continual learning evaluation.
 
 Task orders follow the DOC paper (Zhang et al., 2025) Table 7:
-  - Orders 1-3: Standard CL Benchmark (5 tasks)
+  - Orders 1-3: Standard CL Benchmark (4 tasks)
   - Orders 4-6: Long Chain (15 tasks from GLUE + SuperGLUE + IMDB + CL Benchmark)
 """
 
@@ -30,7 +30,7 @@ class DatasetConfig:
 _CL_BENCHMARK_DATASETS: Dict[str, DatasetConfig] = {
     "ag_news": DatasetConfig(
         name="ag_news",
-        source="ag_news",
+        source="fancyzhx/ag_news",
         num_classes=4,
         label_map={0: "World", 1: "Sports", 2: "Business", 3: "Technology"},
         text_fields=["text"],
@@ -54,7 +54,7 @@ _CL_BENCHMARK_DATASETS: Dict[str, DatasetConfig] = {
     ),
     "dbpedia": DatasetConfig(
         name="dbpedia",
-        source="dbpedia_14",
+        source="fancyzhx/dbpedia_14",
         num_classes=14,
         label_map={
             0: "Company", 1: "EducationalInstitution", 2: "Artist",
@@ -82,7 +82,7 @@ _CL_BENCHMARK_DATASETS: Dict[str, DatasetConfig] = {
 _GLUE_DATASETS: Dict[str, DatasetConfig] = {
     "sst2": DatasetConfig(
         name="sst2",
-        source="glue",
+        source="nyu-mll/glue",
         subset="sst2",
         num_classes=2,
         label_map={0: "negative", 1: "positive"},
@@ -91,7 +91,7 @@ _GLUE_DATASETS: Dict[str, DatasetConfig] = {
     ),
     "mnli": DatasetConfig(
         name="mnli",
-        source="glue",
+        source="nyu-mll/glue",
         subset="mnli",
         num_classes=3,
         label_map={0: "entailment", 1: "neutral", 2: "contradiction"},
@@ -100,7 +100,7 @@ _GLUE_DATASETS: Dict[str, DatasetConfig] = {
     ),
     "qqp": DatasetConfig(
         name="qqp",
-        source="glue",
+        source="nyu-mll/glue",
         subset="qqp",
         num_classes=2,
         label_map={0: "not duplicate", 1: "duplicate"},
@@ -109,7 +109,7 @@ _GLUE_DATASETS: Dict[str, DatasetConfig] = {
     ),
     "rte": DatasetConfig(
         name="rte",
-        source="glue",
+        source="nyu-mll/glue",
         subset="rte",
         num_classes=2,
         label_map={0: "entailment", 1: "not entailment"},
@@ -193,25 +193,25 @@ ALL_DATASETS: Dict[str, DatasetConfig] = {
 # ---------------------------------------------------------------------------
 
 TASK_ORDERS: Dict[str, List[str]] = {
-    # Standard CL Benchmark — 5 tasks each
-    "order_1": ["ag_news", "yelp", "amazon", "dbpedia", "yahoo"],
-    "order_2": ["dbpedia", "yahoo", "ag_news", "amazon", "yelp"],
-    "order_3": ["yelp", "yahoo", "amazon", "dbpedia", "ag_news"],
-    # Long Chain — 15 tasks each
+    # Standard CL Benchmark — 4 tasks each (DOC Table 7)
+    "order_1": ["dbpedia", "amazon", "yahoo", "ag_news"],
+    "order_2": ["dbpedia", "amazon", "ag_news", "yahoo"],
+    "order_3": ["yahoo", "amazon", "ag_news", "dbpedia"],
+    # Long Chain — 15 tasks each (DOC Table 7)
     "order_4": [
-        "sst2", "mnli", "qqp", "rte", "boolq",
-        "wic", "cb", "copa", "multirc", "imdb",
-        "ag_news", "yelp", "amazon", "dbpedia", "yahoo",
+        "mnli", "cb", "wic", "copa", "qqp",
+        "boolq", "rte", "imdb", "yelp", "amazon",
+        "sst2", "dbpedia", "ag_news", "multirc", "yahoo",
     ],
     "order_5": [
-        "ag_news", "sst2", "imdb", "yelp", "amazon",
-        "boolq", "rte", "cb", "copa", "wic",
-        "multirc", "mnli", "qqp", "dbpedia", "yahoo",
+        "multirc", "boolq", "wic", "mnli", "cb",
+        "copa", "qqp", "rte", "imdb", "sst2",
+        "dbpedia", "ag_news", "yelp", "amazon", "yahoo",
     ],
     "order_6": [
-        "dbpedia", "yahoo", "mnli", "qqp", "rte",
-        "sst2", "boolq", "wic", "cb", "copa",
-        "multirc", "imdb", "ag_news", "yelp", "amazon",
+        "yelp", "amazon", "mnli", "cb", "copa",
+        "qqp", "rte", "imdb", "sst2", "dbpedia",
+        "ag_news", "yahoo", "multirc", "boolq", "wic",
     ],
 }
 
@@ -258,5 +258,5 @@ def get_task_order(order_name: str) -> List[str]:
 
 
 def is_standard_benchmark(order_name: str) -> bool:
-    """Return True if the order is a standard CL benchmark (5 tasks)."""
+    """Return True if the order is a standard CL benchmark (4 tasks)."""
     return order_name in _STANDARD_ORDERS

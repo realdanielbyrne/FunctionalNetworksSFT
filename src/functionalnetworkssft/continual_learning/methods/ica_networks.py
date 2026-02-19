@@ -10,9 +10,10 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from torch import nn
+from torch.nn.utils import parametrize
 
 from .base import ContinualLearningMethod
-from ...ica_mask import ICAMask
+from ...ica_mask import ICAMask, RowMaskedDelta, _build_row_mask, _union_selected_rows
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,12 @@ class ICANetworksCL(ContinualLearningMethod):
                to protect them from being modified
     - 'preserve': Only allow training through specific ICA components,
                  protecting all other neurons
+
+    Anti-drift:
+        When enabled, applies RowMaskedDelta parametrization to prevent
+        optimizer state drift on frozen (masked) neurons. Without this,
+        Adam momentum can accumulate on frozen rows and cause a sudden
+        jump when the mask changes.
     """
 
     def __init__(
@@ -42,6 +49,7 @@ class ICANetworksCL(ContinualLearningMethod):
         ica_percentile: float = 98.0,
         component_selection_strategy: str = "cumulative",
         protected_component_ids: Optional[List[int]] = None,
+        anti_drift: bool = False,
     ):
         """
         Initialize ICA Networks CL method.
@@ -55,6 +63,8 @@ class ICANetworksCL(ContinualLearningMethod):
             ica_percentile: Percentile for thresholding component masks
             component_selection_strategy: How to select components to protect
             protected_component_ids: Specific component IDs to protect (optional)
+            anti_drift: If True, apply RowMaskedDelta parametrization to
+                prevent optimizer drift on frozen neurons.
         """
         super().__init__(model, config)
 
@@ -64,9 +74,11 @@ class ICANetworksCL(ContinualLearningMethod):
         self.ica_percentile = ica_percentile
         self.component_selection_strategy = component_selection_strategy
         self.protected_component_ids = protected_component_ids or []
+        self.anti_drift = anti_drift
 
         self.ica_mask: Optional[ICAMask] = None
         self.task_protected_components: Dict[int, List[int]] = {}
+        self._parametrized_modules: List[str] = []
 
         if ica_template_path:
             self._load_ica_templates(ica_template_path)
@@ -116,6 +128,92 @@ class ICANetworksCL(ContinualLearningMethod):
         else:
             return list(range(min(task_idx + 1, self.ica_components)))
 
+    def _apply_anti_drift(self, component_ids: List[int]) -> None:
+        """Apply RowMaskedDelta parametrization to freeze masked rows.
+
+        This prevents optimizer momentum from accumulating on frozen
+        neurons, which would cause discontinuous jumps when masks change.
+        """
+        if self.ica_mask is None:
+            return
+
+        # Gather rows that should be trainable from the ICA mask
+        components = self.ica_mask.mask_dict_components
+
+        # Find MLP down-projection layers and apply parametrization
+        for name, module in self.model.named_modules():
+            if not isinstance(module, nn.Linear):
+                continue
+            # Identify down-projection layers (out_features == hidden_size, in > out)
+            if module.out_features >= module.in_features:
+                continue
+
+            # Extract layer index from module name
+            layer_idx = None
+            for part in name.split("."):
+                try:
+                    layer_idx = int(part)
+                except ValueError:
+                    continue
+
+            if layer_idx is None:
+                continue
+
+            layer_key = f"layer_{layer_idx}"
+
+            # Collect trainable rows from selected components
+            train_rows = []
+            for comp_id in component_ids:
+                comp_data = components.get(comp_id, {})
+                rows = comp_data.get(layer_key, [])
+                train_rows.extend(rows)
+            train_rows = sorted(set(train_rows))
+
+            if not train_rows:
+                continue
+
+            # Invert for lesion mode (protect = freeze selected, train = rest)
+            if self.mask_mode == "lesion":
+                all_rows = set(range(module.in_features))
+                train_rows = sorted(all_rows - set(train_rows))
+
+            row_mask = _build_row_mask(
+                module.in_features,
+                train_rows,
+                module.weight.device,
+                module.weight.dtype,
+            )
+
+            # Transpose mask for weight parametrization (weight is [out, in])
+            # RowMaskedDelta expects [out_features, 1]
+            # Here we need to mask input features (intermediate dim)
+            # Parametrize the weight
+            try:
+                parametrize.register_parametrization(
+                    module, "weight",
+                    RowMaskedDelta(
+                        row_mask.T,  # [1, in_features] for broadcast over rows
+                        module.weight.data,
+                    ),
+                )
+                self._parametrized_modules.append(name)
+                logger.debug(f"Anti-drift parametrization on {name}")
+            except Exception as e:
+                logger.warning(f"Could not apply anti-drift to {name}: {e}")
+
+    def _remove_anti_drift(self) -> None:
+        """Remove RowMaskedDelta parametrizations."""
+        for name in self._parametrized_modules:
+            parts = name.split(".")
+            module = self.model
+            for part in parts:
+                module = getattr(module, part)
+            try:
+                parametrize.remove_parametrizations(module, "weight")
+            except Exception:
+                pass
+        self._parametrized_modules = []
+
     def before_task(
         self, task_idx: int, task_name: str, task_data: Any
     ) -> None:
@@ -139,6 +237,10 @@ class ICANetworksCL(ContinualLearningMethod):
                 self.model, component_ids=protected, mode=self.mask_mode
             )
 
+            if self.anti_drift:
+                logger.info(f"Task {task_idx}: Applying anti-drift parametrization")
+                self._apply_anti_drift(protected)
+
     def compute_loss(
         self, batch: Dict[str, torch.Tensor], task_idx: int
     ) -> torch.Tensor:
@@ -161,12 +263,19 @@ class ICANetworksCL(ContinualLearningMethod):
                 handle.remove()
             self.ica_mask.mask_handles = []
 
+        if self.anti_drift:
+            self._remove_anti_drift()
+
     def get_model_for_inference(self) -> nn.Module:
         """Return model without masks for inference."""
         if self.ica_mask and self.ica_mask.mask_handles:
             for handle in self.ica_mask.mask_handles:
                 handle.remove()
             self.ica_mask.mask_handles = []
+
+        if self.anti_drift:
+            self._remove_anti_drift()
+
         return self.model
 
     def get_state_dict(self) -> Dict[str, Any]:
@@ -179,6 +288,7 @@ class ICANetworksCL(ContinualLearningMethod):
         state["ica_percentile"] = self.ica_percentile
         state["mask_mode"] = self.mask_mode
         state["ica_template_path"] = self.ica_template_path
+        state["anti_drift"] = self.anti_drift
         return state
 
     def load_state_dict(self, state: Dict[str, Any]) -> None:
@@ -191,6 +301,7 @@ class ICANetworksCL(ContinualLearningMethod):
         self.ica_components = state.get("ica_components", self.ica_components)
         self.ica_percentile = state.get("ica_percentile", self.ica_percentile)
         self.mask_mode = state.get("mask_mode", self.mask_mode)
+        self.anti_drift = state.get("anti_drift", self.anti_drift)
 
     def save_state(self, path: str) -> None:
         """Save ICA state and protected components."""
@@ -199,9 +310,9 @@ class ICANetworksCL(ContinualLearningMethod):
             "ica_components": self.ica_components,
             "ica_percentile": self.ica_percentile,
             "mask_mode": self.mask_mode,
+            "anti_drift": self.anti_drift,
         }
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
         with open(path / "ica_cl_state.json", "w") as f:
             json.dump(state, f, indent=2)
-
